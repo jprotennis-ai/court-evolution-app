@@ -1,0 +1,21 @@
+# Court Evolution Stroke Analyzer - Backend Dependencies
+
+# Web Framework
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+python-multipart==0.0.6
+
+# Image/Video Processing
+opencv-python-headless==4.9.0.80
+numpy==1.26.3
+Pillow==10.2.0
+
+# Pose Estimation
+mediapipe==0.10.9
+
+# Optional: AI-powered analysis
+openai==1.12.0
+python-dotenv==1.0.1
+
+# Utilities
+pydantic==2.5.3

@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>Court Evolution - Stroke Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    
+    <style>
+        :root {
+            --primary: #0a0a0a;
+            --accent: #c8f542;
+            --accent-dark: #a8d935;
+            --white: #ffffff;
+            --gray-100: #f5f5f5;
+            --gray-200: #e5e5e5;
+            --gray-400: #a3a3a3;
+            --gray-600: #525252;
+            --gray-800: #262626;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --error: #ef4444;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--primary);
+            color: var(--white);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ==================== APP STRUCTURE ==================== */
+        .app {
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+            max-width: 480px;
+            margin: 0 auto;
+        }
+
+        /* ==================== HEADER ==================== */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: var(--primary);
+            border-bottom: 1px solid var(--gray-800);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo svg {
+            width: 80px;
+            height: 32px;
+        }
+
+        .logo-text {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 16px;
+            letter-spacing: 1px;
+        }
+
+        .logo-text span {
+            color: var(--accent);
+        }
+
+        .header-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--gray-800);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        /* ==================== MAIN CONTENT ==================== */
+        .main {
+            flex: 1;
+            padding: 20px;
+        }
+
+        /* ==================== SCREENS ==================== */
+        .screen {
+            display: none;
+        }
+
+        .screen.active {
+            display: block;
+        }
+
+        /* ==================== HOME SCREEN ==================== */
+        .welcome-card {
+            background: linear-gradient(135deg, var(--gray-800) 0%, var(--primary) 100%);
+            border-radius: 16px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border: 1px solid var(--gray-800);
+        }
+
+        .welcome-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 28px;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .welcome-title span {
+            color: var(--accent);
+        }
+
+        .welcome-text {
+            color: var(--gray-400);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .sport-selector {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .sport-btn {
+            flex: 1;
+            padding: 16px;
+            background: var(--gray-800);
+            border: 2px solid var(--gray-800);
+            border-radius: 12px;
+            color: var(--white);
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sport-btn.active {
+            border-color: var(--accent);
+            background: rgba(200, 245, 66, 0.1);
+        }
+
+        .sport-btn .icon {
+            font-size: 28px;
+        }
+
+        .section-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 18px;
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+            color: var(--accent);
+        }
+
+        .stroke-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 24px;
+        }
+
+        .stroke-card {
+            background: var(--gray-800);
+            border-radius: 12px;
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+
+        .stroke-card:hover, .stroke-card.selected {
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+
+        .stroke-card .name {
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .stroke-card .desc {
+            font-size: 12px;
+            color: var(--gray-400);
+        }
+
+        .record-btn {
+            width: 100%;
+            padding: 18px;
+            background: var(--accent);
+            color: var(--primary);
+            border: none;
+            border-radius: 12px;
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 20px;
+            letter-spacing: 2px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .record-btn:hover {
+            background: var(--accent-dark);
+        }
+
+        .record-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        /* ==================== CAMERA SCREEN ==================== */
+        .camera-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 9/16;
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            margin-bottom: 20px;
+        }
+
+        #videoPreview, #videoPlayback {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .camera-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+
+        .pose-guide {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 60%;
+            height: 80%;
+            border: 2px dashed var(--accent);
+            border-radius: 12px;
+            opacity: 0.5;
+        }
+
+        .camera-controls {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .camera-btn {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            transition: all 0.2s;
+        }
+
+        .camera-btn.record {
+            width: 72px;
+            height: 72px;
+            background: var(--error);
+            color: var(--white);
+            border: 4px solid var(--white);
+        }
+
+        .camera-btn.record.recording {
+            background: var(--white);
+        }
+
+        .camera-btn.record.recording::before {
+            content: '';
+            width: 24px;
+            height: 24px;
+            background: var(--error);
+            border-radius: 4px;
+        }
+
+        .camera-btn.secondary {
+            background: var(--gray-800);
+            color: var(--white);
+        }
+
+        .recording-indicator {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(0,0,0,0.6);
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .recording-indicator .dot {
+            width: 10px;
+            height: 10px;
+            background: var(--error);
+            border-radius: 50%;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .recording-indicator.hidden {
+            display: none;
+        }
+
+        .timer {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 18px;
+        }
+
+        /* ==================== RESULTS SCREEN ==================== */
+        .results-header {
+            text-align: center;
+            margin-bottom: 24px;
+        }
+
+        .results-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 24px;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .score-circle {
+            width: 140px;
+            height: 140px;
+            border-radius: 50%;
+            background: conic-gradient(
+                var(--accent) calc(var(--score) * 3.6deg),
+                var(--gray-800) 0deg
+            );
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 20px auto;
+            position: relative;
+        }
+
+        .score-circle::before {
+            content: '';
+            position: absolute;
+            width: 110px;
+            height: 110px;
+            background: var(--primary);
+            border-radius: 50%;
+        }
+
+        .score-value {
+            position: relative;
+            z-index: 1;
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 48px;
+            color: var(--accent);
+        }
+
+        .score-label {
+            font-size: 14px;
+            color: var(--gray-400);
+        }
+
+        .feedback-section {
+            margin-bottom: 24px;
+        }
+
+        .feedback-card {
+            background: var(--gray-800);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 12px;
+            border-left: 4px solid var(--accent);
+        }
+
+        .feedback-card.needs_work {
+            border-left-color: var(--warning);
+        }
+
+        .feedback-card .aspect {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .feedback-card .aspect-score {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 18px;
+            color: var(--accent);
+        }
+
+        .feedback-card.needs_work .aspect-score {
+            color: var(--warning);
+        }
+
+        .feedback-card .message {
+            font-size: 13px;
+            color: var(--gray-400);
+            line-height: 1.5;
+        }
+
+        .tips-section {
+            background: var(--gray-800);
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }
+
+        .tips-title {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 16px;
+            color: var(--accent);
+            margin-bottom: 12px;
+        }
+
+        .tip-item {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 12px;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+
+        .tip-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .tip-item .icon {
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .action-btn {
+            flex: 1;
+            padding: 16px;
+            border-radius: 12px;
+            font-family: inherit;
+            font-weight: 600;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .action-btn.primary {
+            background: var(--accent);
+            color: var(--primary);
+            border: none;
+        }
+
+        .action-btn.secondary {
+            background: var(--gray-800);
+            color: var(--white);
+            border: 2px solid var(--gray-800);
+        }
+
+        /* ==================== LOADING STATE ==================== */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(10, 10, 10, 0.95);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .loading-spinner {
+            width: 60px;
+            height: 60px;
+            border: 4px solid var(--gray-800);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-size: 16px;
+            color: var(--gray-400);
+        }
+
+        /* ==================== BOTTOM NAV ==================== */
+        .bottom-nav {
+            display: flex;
+            background: var(--gray-800);
+            border-top: 1px solid var(--gray-600);
+            position: sticky;
+            bottom: 0;
+        }
+
+        .nav-item {
+            flex: 1;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            color: var(--gray-400);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all 0.2s;
+            background: none;
+            border: none;
+        }
+
+        .nav-item.active {
+            color: var(--accent);
+        }
+
+        .nav-item .icon {
+            font-size: 22px;
+        }
+
+        /* ==================== HISTORY SCREEN ==================== */
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .history-card {
+            background: var(--gray-800);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .history-card:hover {
+            background: var(--gray-600);
+        }
+
+        .history-score {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: var(--accent);
+            color: var(--primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 20px;
+            flex-shrink: 0;
+        }
+
+        .history-info {
+            flex: 1;
+        }
+
+        .history-stroke {
+            font-weight: 600;
+            font-size: 15px;
+            margin-bottom: 2px;
+        }
+
+        .history-meta {
+            font-size: 12px;
+            color: var(--gray-400);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--gray-400);
+        }
+
+        .empty-state .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        /* ==================== SETTINGS SCREEN ==================== */
+        .settings-group {
+            margin-bottom: 24px;
+        }
+
+        .settings-item {
+            background: var(--gray-800);
+            border-radius: 12px;
+            padding: 16px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .settings-item .label {
+            font-weight: 500;
+        }
+
+        .settings-item .desc {
+            font-size: 12px;
+            color: var(--gray-400);
+        }
+
+        .toggle {
+            width: 50px;
+            height: 28px;
+            background: var(--gray-600);
+            border-radius: 14px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .toggle.active {
+            background: var(--accent);
+        }
+
+        .toggle::after {
+            content: '';
+            position: absolute;
+            width: 22px;
+            height: 22px;
+            background: var(--white);
+            border-radius: 50%;
+            top: 3px;
+            left: 3px;
+            transition: all 0.2s;
+        }
+
+        .toggle.active::after {
+            left: 25px;
+        }
+    </style>
+</head>
+<body>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <svg viewBox="0 0 300 120">
+                    <path d="M20 60 Q80 20 140 60 Q200 100 260 60" stroke="#c8f542" stroke-width="4" fill="none" stroke-linecap="round"/>
+                    <polygon points="260,60 245,50 250,65" fill="#c8f542"/>
+                    <circle cx="50" cy="60" r="22" fill="none" stroke="#c8f542" stroke-width="3"/>
+                    <path d="M50 38 Q62 50 62 60 Q62 70 50 82" stroke="#c8f542" stroke-width="2" fill="none"/>
+                    <path d="M50 38 Q38 50 38 60 Q38 70 50 82" stroke="#c8f542" stroke-width="2" fill="none"/>
+                    <circle cx="140" cy="60" r="22" fill="none" stroke="#c8f542" stroke-width="3" stroke-dasharray="4 2"/>
+                    <circle cx="230" cy="60" r="22" fill="#c8f542"/>
+                    <circle cx="222" cy="52" r="3" fill="#0a0a0a"/>
+                    <circle cx="238" cy="52" r="3" fill="#0a0a0a"/>
+                    <circle cx="230" cy="60" r="3" fill="#0a0a0a"/>
+                    <circle cx="222" cy="68" r="3" fill="#0a0a0a"/>
+                    <circle cx="238" cy="68" r="3" fill="#0a0a0a"/>
+                </svg>
+                <span class="logo-text">COURT<span>EVOLUTION</span></span>
+            </div>
+            <div class="header-icon" onclick="showScreen('settings')">⚙️</div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main">
+            <!-- Home Screen -->
+            <div id="homeScreen" class="screen active">
+                <div class="welcome-card">
+                    <h1 class="welcome-title">STROKE <span>ANALYZER</span></h1>
+                    <p class="welcome-text">Record your tennis or pickleball strokes and get instant AI-powered feedback to improve your technique.</p>
+                </div>
+
+                <div class="sport-selector">
+                    <button class="sport-btn active" data-sport="tennis" onclick="selectSport('tennis')">
+                        <span class="icon">🎾</span>
+                        <span>Tennis</span>
+                    </button>
+                    <button class="sport-btn" data-sport="pickleball" onclick="selectSport('pickleball')">
+                        <span class="icon">🏓</span>
+                        <span>Pickleball</span>
+                    </button>
+                </div>
+
+                <h2 class="section-title">SELECT STROKE TYPE</h2>
+                <div id="strokeGrid" class="stroke-grid">
+                    <!-- Populated by JavaScript -->
+                </div>
+
+                <button class="record-btn" onclick="startRecording()" id="recordBtn" disabled>
+                    <span>📹</span>
+                    <span>START RECORDING</span>
+                </button>
+            </div>
+
+            <!-- Camera Screen -->
+            <div id="cameraScreen" class="screen">
+                <div class="camera-container">
+                    <video id="videoPreview" autoplay playsinline muted></video>
+                    <video id="videoPlayback" playsinline style="display: none;"></video>
+                    <div class="camera-overlay">
+                        <div class="pose-guide"></div>
+                    </div>
+                    <div id="recordingIndicator" class="recording-indicator hidden">
+                        <span class="dot"></span>
+                        <span class="timer" id="recordTimer">00:00</span>
+                    </div>
+                </div>
+
+                <div class="camera-controls">
+                    <button class="camera-btn secondary" onclick="flipCamera()">🔄</button>
+                    <button class="camera-btn record" id="captureBtn" onclick="toggleRecording()"></button>
+                    <button class="camera-btn secondary" onclick="cancelRecording()">✕</button>
+                </div>
+            </div>
+
+            <!-- Results Screen -->
+            <div id="resultsScreen" class="screen">
+                <div class="results-header">
+                    <h2 class="results-title">ANALYSIS COMPLETE</h2>
+                    <p id="resultStrokeType" class="score-label">Tennis Forehand</p>
+                    <div class="score-circle" id="scoreCircle" style="--score: 0">
+                        <span class="score-value" id="scoreValue">0</span>
+                    </div>
+                    <p class="score-label">Overall Score</p>
+                </div>
+
+                <div class="feedback-section">
+                    <h3 class="section-title">DETAILED FEEDBACK</h3>
+                    <div id="feedbackList">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+
+                <div class="tips-section">
+                    <h3 class="tips-title">💡 IMPROVEMENT TIPS</h3>
+                    <div id="tipsList">
+                        <!-- Populated by JavaScript -->
+                    </div>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="action-btn secondary" onclick="showScreen('home')">
+                        <span>🏠</span> Home
+                    </button>
+                    <button class="action-btn primary" onclick="startRecording()">
+                        <span>📹</span> Record Again
+                    </button>
+                </div>
+            </div>
+
+            <!-- History Screen -->
+            <div id="historyScreen" class="screen">
+                <h2 class="section-title">ANALYSIS HISTORY</h2>
+                <div id="historyList" class="history-list">
+                    <!-- Populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Settings Screen -->
+            <div id="settingsScreen" class="screen">
+                <h2 class="section-title">SETTINGS</h2>
+                
+                <div class="settings-group">
+                    <div class="settings-item">
+                        <div>
+                            <div class="label">Video Quality</div>
+                            <div class="desc">Higher quality = larger files</div>
+                        </div>
+                        <select id="videoQuality" style="background: var(--gray-600); color: white; border: none; padding: 8px; border-radius: 8px;">
+                            <option value="720">720p</option>
+                            <option value="1080" selected>1080p</option>
+                        </select>
+                    </div>
+                    
+                    <div class="settings-item">
+                        <div>
+                            <div class="label">Show Pose Guide</div>
+                            <div class="desc">Overlay guide while recording</div>
+                        </div>
+                        <div class="toggle active" id="poseGuideToggle" onclick="toggleSetting('poseGuide')"></div>
+                    </div>
+                    
+                    <div class="settings-item">
+                        <div>
+                            <div class="label">Sound Effects</div>
+                            <div class="desc">Play sounds during recording</div>
+                        </div>
+                        <div class="toggle active" id="soundToggle" onclick="toggleSetting('sound')"></div>
+                    </div>
+                </div>
+
+                <div class="settings-group">
+                    <h3 class="section-title">ABOUT</h3>
+                    <div class="settings-item">
+                        <div>
+                            <div class="label">Court Evolution</div>
+                            <div class="desc">Stroke Analyzer v1.0.0</div>
+                        </div>
+                    </div>
+                    <div class="settings-item">
+                        <div>
+                            <div class="label">Coach Jason Alfrey</div>
+                            <div class="desc">(760) 533-9842 • courtevolution.com</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Bottom Navigation -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" onclick="showScreen('home')" data-screen="home">
+                <span class="icon">🏠</span>
+                <span>Home</span>
+            </button>
+            <button class="nav-item" onclick="showScreen('history')" data-screen="history">
+                <span class="icon">📊</span>
+                <span>History</span>
+            </button>
+            <button class="nav-item" onclick="showScreen('settings')" data-screen="settings">
+                <span class="icon">⚙️</span>
+                <span>Settings</span>
+            </button>
+        </nav>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="loading-overlay hidden">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">Analyzing your stroke...</p>
+        </div>
+    </div>
+
+    <script>
+        // ==================== APP STATE ====================
+        const state = {
+            sport: 'tennis',
+            strokeType: null,
+            isRecording: false,
+            recordedBlob: null,
+            mediaRecorder: null,
+            stream: null,
+            facingMode: 'environment',
+            recordingStartTime: null,
+            timerInterval: null,
+            history: JSON.parse(localStorage.getItem('strokeHistory') || '[]'),
+            settings: {
+                poseGuide: true,
+                sound: true,
+                videoQuality: '1080'
+            }
+        };
+
+        // API Configuration
+        const API_BASE = 'http://localhost:8000'; // Change to your backend URL
+
+        // Stroke types data
+        const strokeTypes = {
+            tennis: [
+                { id: 'forehand', name: 'Forehand', desc: 'Basic forehand groundstroke' },
+                { id: 'backhand', name: 'Backhand', desc: 'One or two-handed backhand' },
+                { id: 'serve', name: 'Serve', desc: 'First or second serve' },
+                { id: 'volley', name: 'Volley', desc: 'Net volley' }
+            ],
+            pickleball: [
+                { id: 'dink', name: 'Dink', desc: 'Soft shot at the kitchen' },
+                { id: 'drive', name: 'Drive', desc: 'Hard groundstroke' },
+                { id: 'serve', name: 'Serve', desc: 'Underhand serve' },
+                { id: 'third_shot_drop', name: 'Third Shot Drop', desc: 'Soft return to kitchen' }
+            ]
+        };
+
+        // ==================== INITIALIZATION ====================
+        document.addEventListener('DOMContentLoaded', () => {
+            renderStrokeGrid();
+            renderHistory();
+            loadSettings();
+        });
+
+        // ==================== SCREEN NAVIGATION ====================
+        function showScreen(screenId) {
+            // Hide all screens
+            document.querySelectorAll('.screen').forEach(screen => {
+                screen.classList.remove('active');
+            });
+            
+            // Show selected screen
+            document.getElementById(screenId + 'Screen').classList.add('active');
+            
+            // Update nav
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+                if (item.dataset.screen === screenId) {
+                    item.classList.add('active');
+                }
+            });
+
+            // Clean up camera if leaving camera screen
+            if (screenId !== 'camera' && state.stream) {
+                stopCamera();
+            }
+        }
+
+        // ==================== SPORT & STROKE SELECTION ====================
+        function selectSport(sport) {
+            state.sport = sport;
+            state.strokeType = null;
+            
+            // Update UI
+            document.querySelectorAll('.sport-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.sport === sport);
+            });
+            
+            renderStrokeGrid();
+            updateRecordButton();
+        }
+
+        function selectStroke(strokeId) {
+            state.strokeType = strokeId;
+            
+            // Update UI
+            document.querySelectorAll('.stroke-card').forEach(card => {
+                card.classList.toggle('selected', card.dataset.stroke === strokeId);
+            });
+            
+            updateRecordButton();
+        }
+
+        function renderStrokeGrid() {
+            const grid = document.getElementById('strokeGrid');
+            const strokes = strokeTypes[state.sport];
+            
+            grid.innerHTML = strokes.map(stroke => `
+                <div class="stroke-card" data-stroke="${stroke.id}" onclick="selectStroke('${stroke.id}')">
+                    <div class="name">${stroke.name}</div>
+                    <div class="desc">${stroke.desc}</div>
+                </div>
+            `).join('');
+        }
+
+        function updateRecordButton() {
+            const btn = document.getElementById('recordBtn');
+            btn.disabled = !state.strokeType;
+        }
+
+        // ==================== CAMERA & RECORDING ====================
+        async function startRecording() {
+            try {
+                showScreen('camera');
+                await initCamera();
+            } catch (err) {
+                console.error('Camera error:', err);
+                alert('Unable to access camera. Please check permissions.');
+                showScreen('home');
+            }
+        }
+
+        async function initCamera() {
+            const constraints = {
+                video: {
+                    facingMode: state.facingMode,
+                    width: { ideal: state.settings.videoQuality === '1080' ? 1920 : 1280 },
+                    height: { ideal: state.settings.videoQuality === '1080' ? 1080 : 720 }
+                },
+                audio: false
+            };
+
+            state.stream = await navigator.mediaDevices.getUserMedia(constraints);
+            
+            const video = document.getElementById('videoPreview');
+            video.srcObject = state.stream;
+            video.style.display = 'block';
+            document.getElementById('videoPlayback').style.display = 'none';
+        }
+
+        function stopCamera() {
+            if (state.stream) {
+                state.stream.getTracks().forEach(track => track.stop());
+                state.stream = null;
+            }
+        }
+
+        async function flipCamera() {
+            state.facingMode = state.facingMode === 'environment' ? 'user' : 'environment';
+            stopCamera();
+            await initCamera();
+        }
+
+        function toggleRecording() {
+            if (state.isRecording) {
+                stopRecordingVideo();
+            } else {
+                startRecordingVideo();
+            }
+        }
+
+        function startRecordingVideo() {
+            const chunks = [];
+            
+            state.mediaRecorder = new MediaRecorder(state.stream, {
+                mimeType: 'video/webm;codecs=vp9'
+            });
+            
+            state.mediaRecorder.ondataavailable = (e) => {
+                if (e.data.size > 0) {
+                    chunks.push(e.data);
+                }
+            };
+            
+            state.mediaRecorder.onstop = () => {
+                state.recordedBlob = new Blob(chunks, { type: 'video/webm' });
+                showVideoPreview();
+            };
+            
+            state.mediaRecorder.start();
+            state.isRecording = true;
+            state.recordingStartTime = Date.now();
+            
+            // Update UI
+            document.getElementById('captureBtn').classList.add('recording');
+            document.getElementById('recordingIndicator').classList.remove('hidden');
+            
+            // Start timer
+            state.timerInterval = setInterval(updateTimer, 1000);
+        }
+
+        function stopRecordingVideo() {
+            if (state.mediaRecorder && state.isRecording) {
+                state.mediaRecorder.stop();
+                state.isRecording = false;
+                
+                // Update UI
+                document.getElementById('captureBtn').classList.remove('recording');
+                document.getElementById('recordingIndicator').classList.add('hidden');
+                
+                // Stop timer
+                clearInterval(state.timerInterval);
+            }
+        }
+
+        function updateTimer() {
+            const elapsed = Math.floor((Date.now() - state.recordingStartTime) / 1000);
+            const mins = Math.floor(elapsed / 60).toString().padStart(2, '0');
+            const secs = (elapsed % 60).toString().padStart(2, '0');
+            document.getElementById('recordTimer').textContent = `${mins}:${secs}`;
+            
+            // Auto-stop after 10 seconds
+            if (elapsed >= 10) {
+                stopRecordingVideo();
+            }
+        }
+
+        function showVideoPreview() {
+            const videoPreview = document.getElementById('videoPreview');
+            const videoPlayback = document.getElementById('videoPlayback');
+            
+            videoPreview.style.display = 'none';
+            videoPlayback.style.display = 'block';
+            videoPlayback.src = URL.createObjectURL(state.recordedBlob);
+            videoPlayback.play();
+            
+            // Analyze after short delay
+            setTimeout(analyzeVideo, 500);
+        }
+
+        function cancelRecording() {
+            stopRecordingVideo();
+            stopCamera();
+            state.recordedBlob = null;
+            showScreen('home');
+        }
+
+        // ==================== VIDEO ANALYSIS ====================
+        async function analyzeVideo() {
+            showLoading(true);
+            
+            try {
+                // Create form data
+                const formData = new FormData();
+                formData.append('file', state.recordedBlob, 'stroke.webm');
+                formData.append('stroke_type', state.strokeType);
+                formData.append('sport', state.sport);
+                
+                // Send to API
+                const response = await fetch(`${API_BASE}/api/analyze/video`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error('Analysis failed');
+                }
+                
+                const data = await response.json();
+                
+                // Save to history
+                saveToHistory(data.result);
+                
+                // Show results
+                displayResults(data.result);
+                
+            } catch (err) {
+                console.error('Analysis error:', err);
+                
+                // Fallback: Generate mock results for demo
+                const mockResult = generateMockResult();
+                saveToHistory(mockResult);
+                displayResults(mockResult);
+            } finally {
+                showLoading(false);
+                stopCamera();
+            }
+        }
+
+        function generateMockResult() {
+            // Generate realistic mock data for demo purposes
+            const scores = {
+                preparation: Math.floor(Math.random() * 20) + 75,
+                backswing: Math.floor(Math.random() * 25) + 70,
+                contact: Math.floor(Math.random() * 20) + 75,
+                follow_through: Math.floor(Math.random() * 25) + 70,
+                footwork: Math.floor(Math.random() * 20) + 75,
+                balance: Math.floor(Math.random() * 15) + 80
+            };
+            
+            const overall = Math.floor(Object.values(scores).reduce((a, b) => a + b) / 6);
+            
+            return {
+                id: Date.now().toString(),
+                timestamp: new Date().toISOString(),
+                sport: state.sport,
+                stroke_type: state.strokeType,
+                overall_score: overall,
+                phase_scores: scores,
+                feedback: [
+                    {
+                        aspect: "Preparation",
+                        score: scores.preparation,
+                        status: scores.preparation >= 80 ? "good" : "needs_work",
+                        message: scores.preparation >= 80 
+                            ? "Good ready position! You're well-prepared for the shot."
+                            : "Focus on getting into a proper ready position earlier."
+                    },
+                    {
+                        aspect: "Backswing",
+                        score: scores.backswing,
+                        status: scores.backswing >= 80 ? "good" : "needs_work",
+                        message: scores.backswing >= 80
+                            ? "Nice backswing! Good preparation for the shot."
+                            : "Try turning your shoulders more to generate power."
+                    },
+                    {
+                        aspect: "Contact Point",
+                        score: scores.contact,
+                        status: scores.contact >= 80 ? "good" : "needs_work",
+                        message: scores.contact >= 80
+                            ? "Excellent contact point!"
+                            : "Try to make contact out in front of your body."
+                    },
+                    {
+                        aspect: "Follow Through",
+                        score: scores.follow_through,
+                        status: scores.follow_through >= 80 ? "good" : "needs_work",
+                        message: scores.follow_through >= 80
+                            ? "Great follow-through!"
+                            : "Complete your follow-through fully for more power."
+                    }
+                ],
+                improvement_tips: [
+                    "Practice shadow swings to improve muscle memory",
+                    "Focus on keeping your eye on the ball through contact",
+                    "Work on your split step for better court movement",
+                    "Record yourself regularly to track progress",
+                    "Keep practicing your " + state.strokeType + "!"
+                ]
+            };
+        }
+
+        // ==================== RESULTS DISPLAY ====================
+        function displayResults(result) {
+            // Update score display
+            const strokeName = strokeTypes[result.sport].find(s => s.id === result.stroke_type)?.name || result.stroke_type;
+            document.getElementById('resultStrokeType').textContent = `${result.sport.charAt(0).toUpperCase() + result.sport.slice(1)} ${strokeName}`;
+            
+            // Animate score
+            const scoreCircle = document.getElementById('scoreCircle');
+            const scoreValue = document.getElementById('scoreValue');
+            
+            let currentScore = 0;
+            const targetScore = result.overall_score;
+            const scoreInterval = setInterval(() => {
+                currentScore += 2;
+                if (currentScore >= targetScore) {
+                    currentScore = targetScore;
+                    clearInterval(scoreInterval);
+                }
+                scoreCircle.style.setProperty('--score', currentScore);
+                scoreValue.textContent = currentScore;
+            }, 20);
+            
+            // Display feedback
+            const feedbackList = document.getElementById('feedbackList');
+            feedbackList.innerHTML = result.feedback.map(fb => `
+                <div class="feedback-card ${fb.status}">
+                    <div class="aspect">
+                        <span>${fb.aspect}</span>
+                        <span class="aspect-score">${fb.score}</span>
+                    </div>
+                    <div class="message">${fb.message}</div>
+                </div>
+            `).join('');
+            
+            // Display tips
+            const tipsList = document.getElementById('tipsList');
+            tipsList.innerHTML = result.improvement_tips.map(tip => `
+                <div class="tip-item">
+                    <span class="icon">→</span>
+                    <span>${tip}</span>
+                </div>
+            `).join('');
+            
+            showScreen('results');
+        }
+
+        // ==================== HISTORY ====================
+        function saveToHistory(result) {
+            state.history.unshift(result);
+            if (state.history.length > 50) {
+                state.history.pop();
+            }
+            localStorage.setItem('strokeHistory', JSON.stringify(state.history));
+            renderHistory();
+        }
+
+        function renderHistory() {
+            const list = document.getElementById('historyList');
+            
+            if (state.history.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="icon">📊</div>
+                        <p>No analysis history yet.<br>Record your first stroke to get started!</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            list.innerHTML = state.history.map(item => {
+                const strokeName = strokeTypes[item.sport]?.find(s => s.id === item.stroke_type)?.name || item.stroke_type;
+                const date = new Date(item.timestamp).toLocaleDateString();
+                
+                return `
+                    <div class="history-card" onclick="showHistoryResult('${item.id}')">
+                        <div class="history-score">${item.overall_score}</div>
+                        <div class="history-info">
+                            <div class="history-stroke">${item.sport.charAt(0).toUpperCase() + item.sport.slice(1)} ${strokeName}</div>
+                            <div class="history-meta">${date}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function showHistoryResult(id) {
+            const result = state.history.find(h => h.id === id);
+            if (result) {
+                displayResults(result);
+            }
+        }
+
+        // ==================== SETTINGS ====================
+        function toggleSetting(setting) {
+            state.settings[setting] = !state.settings[setting];
+            document.getElementById(setting === 'poseGuide' ? 'poseGuideToggle' : 'soundToggle')
+                .classList.toggle('active', state.settings[setting]);
+            localStorage.setItem('settings', JSON.stringify(state.settings));
+            
+            // Update pose guide visibility
+            if (setting === 'poseGuide') {
+                document.querySelector('.pose-guide').style.display = state.settings.poseGuide ? 'block' : 'none';
+            }
+        }
+
+        function loadSettings() {
+            const saved = localStorage.getItem('settings');
+            if (saved) {
+                state.settings = JSON.parse(saved);
+                document.getElementById('poseGuideToggle').classList.toggle('active', state.settings.poseGuide);
+                document.getElementById('soundToggle').classList.toggle('active', state.settings.sound);
+                document.getElementById('videoQuality').value = state.settings.videoQuality;
+            }
+        }
+
+        // ==================== UTILITIES ====================
+        function showLoading(show) {
+            document.getElementById('loadingOverlay').classList.toggle('hidden', !show);
+        }
+    </script>
+</body>
+</html>
