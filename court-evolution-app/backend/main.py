@@ -530,6 +530,137 @@ class StrokePhaseDetector:
 
         return phases
 
+    @staticmethod
+    def detect_backhand_phases(frame_angles: List[Dict]) -> Dict[str, List[int]]:
+        """
+        Splits a backhand video into phases.
+        Similar to forehand but with different rotation direction expectations.
+
+        Phases:
+            1. PREPARATION — athletic stance, recognition
+            2. UNIT TURN — shoulders rotate (opposite direction to forehand)
+            3. RACKET DROP / SLOT — racket drops into hitting slot
+            4. FORWARD SWING / CONTACT — extension through the ball
+            5. FOLLOW THROUGH — extension out front or wrap finish
+        """
+        n = len(frame_angles)
+        if n == 0:
+            return {}
+
+        phases = {
+            "preparation": [],
+            "unit_turn": [],
+            "racket_drop": [],
+            "forward_swing_contact": [],
+            "follow_through": [],
+        }
+
+        # Use same detection logic as forehand — the phase boundaries
+        # are identified the same way (rotation, drop, forward reach)
+        xfactors = [f.get("xfactor", 0) for f in frame_angles]
+        wrist_drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frame_angles]
+        wrist_forwards = [max(f.get("r_wrist_forward", 0), f.get("l_wrist_forward", 0)) for f in frame_angles]
+
+        peak_turn_frame = xfactors.index(max(xfactors)) if xfactors else 0
+        peak_drop_frame = wrist_drops.index(max(wrist_drops)) if wrist_drops else 0
+        peak_forward_frame = wrist_forwards.index(max(wrist_forwards)) if wrist_forwards else 0
+
+        turn_start = max(0, peak_turn_frame - int(n * 0.15))
+
+        for i in range(n):
+            if i < turn_start:
+                phases["preparation"].append(i)
+            elif i <= peak_turn_frame:
+                phases["unit_turn"].append(i)
+            elif i <= peak_drop_frame:
+                phases["racket_drop"].append(i)
+            elif i <= peak_forward_frame:
+                phases["forward_swing_contact"].append(i)
+            else:
+                phases["follow_through"].append(i)
+
+        return phases
+
+    @staticmethod
+    def detect_volley_phases(frame_angles: List[Dict]) -> Dict[str, List[int]]:
+        """
+        Splits a volley video into phases.
+        Volleys are compact — minimal backswing, short motion.
+
+        Phases:
+            1. READY POSITION — continental grip, racket up
+            2. SHOULDER TURN / STEP — compact turn, step to ball
+            3. CONTACT — punch through, firm wrist
+            4. RECOVERY — back to ready
+        """
+        n = len(frame_angles)
+        if n == 0:
+            return {}
+
+        phases = {
+            "ready_position": [],
+            "shoulder_turn_step": [],
+            "contact": [],
+            "recovery": [],
+        }
+
+        # Volleys are short — find the contact frame (max forward wrist reach)
+        wrist_forwards = [max(f.get("r_wrist_forward", 0), f.get("l_wrist_forward", 0)) for f in frame_angles]
+        peak_forward = wrist_forwards.index(max(wrist_forwards)) if wrist_forwards else n // 2
+
+        for i in range(n):
+            if i < peak_forward * 0.3:
+                phases["ready_position"].append(i)
+            elif i < peak_forward:
+                phases["shoulder_turn_step"].append(i)
+            elif i <= min(peak_forward + 2, n - 1):
+                phases["contact"].append(i)
+            else:
+                phases["recovery"].append(i)
+
+        return phases
+
+    @staticmethod
+    def detect_pickleball_groundstroke_phases(frame_angles: List[Dict]) -> Dict[str, List[int]]:
+        """
+        Generic pickleball groundstroke phases (drive, dink, third shot drop).
+        Shorter, more compact motion than tennis.
+
+        Phases:
+            1. READY / PREPARATION
+            2. BACKSWING (compact)
+            3. FORWARD SWING / CONTACT
+            4. FOLLOW THROUGH (controlled)
+        """
+        n = len(frame_angles)
+        if n == 0:
+            return {}
+
+        phases = {
+            "preparation": [],
+            "backswing": [],
+            "forward_swing_contact": [],
+            "follow_through": [],
+        }
+
+        wrist_forwards = [max(f.get("r_wrist_forward", 0), f.get("l_wrist_forward", 0)) for f in frame_angles]
+        xfactors = [f.get("xfactor", 0) for f in frame_angles]
+
+        peak_turn = xfactors.index(max(xfactors)) if xfactors else n // 4
+        peak_forward = wrist_forwards.index(max(wrist_forwards)) if wrist_forwards else n // 2
+
+        for i in range(n):
+            if i < peak_turn * 0.5:
+                phases["preparation"].append(i)
+            elif i <= peak_turn:
+                phases["backswing"].append(i)
+            elif i <= peak_forward:
+                phases["forward_swing_contact"].append(i)
+            else:
+                phases["follow_through"].append(i)
+
+        return phases
+
 
 # ==================== SERVE ANALYZER ====================
 
@@ -1188,6 +1319,770 @@ class ServeAnalyzer:
             "details": {"avg_stance_ratio": round(avg_stance, 2), "stability_score": stability_score, "weight_distribution": round(avg_weight, 4)},
             "tip": tip if tip else "Solid platform stance. Stability in the setup translates directly to consistency under pressure."
         }
+
+
+# ==================== BACKHAND ANALYZER ====================
+
+class BackhandAnalyzer:
+    """
+    Biomechanical analysis of the tennis backhand.
+    Handles both one-handed and two-handed patterns.
+
+    Model reference: Novak Djokovic (two-handed), 
+    Roger Federer (one-handed) as composite benchmarks.
+
+    Components:
+    1. Unit Turn — shoulders rotate, lead shoulder points to ball
+    2. Racket Slot / Drop — racket drops into low-to-high slot
+    3. Contact Point — out front, arm(s) extended, balanced
+    4. Follow Through — extension toward target, then wrap/finish
+    5. Kinetic Chain — hip-shoulder sequence, weight transfer
+    6. Athletic Base — stance width, knee bend
+    """
+
+    BENCHMARKS = {
+        "bh_peak_xfactor": (12, 20, 35, 48),
+        "bh_shoulder_rotation": (25, 40, 65, 80),
+        "bh_wrist_drop": (0.01, 0.03, 0.09, 0.14),
+        "bh_contact_elbow": (130, 145, 170, 180),
+        "bh_contact_out_front": (0.05, 0.08, 0.18, 0.25),
+        "bh_knee_bend": (115, 130, 155, 170),
+        "bh_stance_width": (1.0, 1.2, 1.8, 2.2),
+    }
+
+    def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        results = {}
+        results["unit_turn"] = self._score_unit_turn(frame_data, phases)
+        results["racket_drop"] = self._score_racket_drop(frame_data, phases)
+        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["follow_through"] = self._score_follow_through(frame_data, phases)
+        results["kinetic_chain"] = self._score_kinetic_chain(frame_data, phases)
+        results["athletic_base"] = self._score_athletic_base(frame_data, phases)
+
+        weights = {"unit_turn": 0.20, "racket_drop": 0.12, "contact_point": 0.25,
+                    "follow_through": 0.15, "kinetic_chain": 0.15, "athletic_base": 0.13}
+        overall = sum(results[k]["score"] * weights[k] for k in weights)
+        results["overall_score"] = round(overall)
+        return results
+
+    def _score_in_range(self, value, key):
+        if key not in self.BENCHMARKS:
+            return 50
+        mn, il, ih, mx = self.BENCHMARKS[key]
+        if il <= value <= ih:
+            return 85 + int(15 * (1 - abs(value - (il + ih) / 2) / max(1, (ih - il) / 2)))
+        elif mn <= value < il:
+            return 45 + int(40 * (value - mn) / max(1, il - mn))
+        elif ih < value <= mx:
+            return 45 + int(40 * (mx - value) / max(1, mx - ih))
+        elif value < mn:
+            return max(10, int(45 * value / max(0.001, mn)))
+        else:
+            return max(10, int(45 * mx / max(0.001, value)))
+
+    def _get_frames(self, frame_data, phases, name):
+        return [frame_data[i] for i in phases.get(name, []) if i < len(frame_data)]
+
+    def _score_unit_turn(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "unit_turn")
+        if not frames:
+            return {"score": 50, "label": "Unit Turn", "feedback": "Could not detect unit turn.", "details": {}, "tip": "Record from a side angle to capture shoulder rotation."}
+
+        peak_xf = max(f.get("xfactor", 0) for f in frames)
+        xf_score = self._score_in_range(peak_xf, "bh_peak_xfactor")
+        peak_shoulder = max(f.get("shoulders_angle", 0) for f in frames)
+        sh_score = self._score_in_range(peak_shoulder, "bh_shoulder_rotation")
+        combined = int(xf_score * 0.50 + sh_score * 0.50)
+
+        fb = []
+        tip = ""
+        if peak_xf < 12:
+            fb.append(f"Very limited shoulder-hip separation ({peak_xf:.0f}°). On the backhand, your lead shoulder needs to point toward the incoming ball.")
+            tip = "Turn your shoulders so your lead shoulder (the one closest to the net) points directly at the incoming ball. This loads your core for the forward swing."
+        elif peak_xf < 20:
+            fb.append(f"Moderate coil on the backhand ({peak_xf:.0f}°). A fuller turn will help generate more power from the core.")
+            tip = "Try to get your chest facing the side fence at the peak of your turn. The more you coil, the more effortless the power."
+        else:
+            fb.append(f"Strong unit turn ({peak_xf:.0f}° separation). Good coil setting up an efficient swing.")
+
+        return {"score": combined, "label": "Unit Turn", "feedback": " ".join(fb),
+                "details": {"peak_xfactor": round(peak_xf, 1), "shoulder_rotation": round(peak_shoulder, 1)},
+                "tip": tip if tip else "Good backhand turn. Keep the coil compact and loaded."}
+
+    def _score_racket_drop(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "racket_drop")
+        if not frames:
+            return {"score": 50, "label": "Racket Slot", "feedback": "Could not detect racket drop phase.", "details": {}, "tip": "Ensure the camera captures your full swing path."}
+
+        max_drop = max(max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames)
+        drop_score = self._score_in_range(max_drop, "bh_wrist_drop")
+
+        fb = []
+        tip = ""
+        if max_drop < 0.01:
+            fb.append("Minimal racket drop detected. The racket is staying too high, limiting your ability to create topspin.")
+            tip = "Let the racket drop below the ball before the forward swing. On the backhand, the racket should slot below the contact point to create a natural low-to-high path."
+        elif max_drop < 0.03:
+            fb.append("Moderate racket drop. A bit more depth below the ball would increase topspin potential.")
+            tip = "Relax the wrists and let gravity pull the racket head down into the slot before you swing forward."
+        else:
+            fb.append("Good racket drop below the ball. This sets up a solid low-to-high swing path for topspin.")
+
+        return {"score": drop_score, "label": "Racket Slot", "feedback": " ".join(fb),
+                "details": {"max_wrist_drop": round(max_drop, 4)},
+                "tip": tip if tip else "Good racket slot. The drop below the ball is key to topspin on the backhand."}
+
+    def _score_contact(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "forward_swing_contact")
+        if not frames:
+            return {"score": 50, "label": "Contact Point", "feedback": "Could not detect contact.", "details": {}, "tip": "Record from the side to capture the contact zone."}
+
+        cf = frames[-1]
+        elbow = min(cf.get("r_elbow_angle", 180), cf.get("l_elbow_angle", 180))
+        elbow_score = self._score_in_range(elbow, "bh_contact_elbow")
+        out_front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        front_score = self._score_in_range(out_front, "bh_contact_out_front")
+        combined = int(elbow_score * 0.45 + front_score * 0.55)
+
+        fb = []
+        tip = ""
+        if elbow < 130:
+            fb.append(f"Arm too bent at contact ({elbow:.0f}°). The ball is getting in on you — you're cramped.")
+            tip = "Step away from the ball and extend your arms through contact. On a two-handed backhand, both arms should be pushing through the ball. On a one-hander, the hitting arm needs full extension."
+        elif elbow > 175:
+            fb.append(f"Arm fully locked at contact ({elbow:.0f}°). A slight bend gives you better control and feel.")
+        else:
+            fb.append(f"Good arm extension at contact ({elbow:.0f}°).")
+
+        if out_front < 0.05:
+            fb.append("Contact point is too deep — the ball is getting behind you.")
+            if not tip:
+                tip = "Make contact further out in front. On the backhand, the contact point should be slightly ahead of your front hip. If you're hitting late, prepare earlier and step into the ball."
+        elif out_front >= 0.08:
+            fb.append("Contact point is well out in front. This gives you offensive positioning.")
+
+        return {"score": combined, "label": "Contact Point", "feedback": " ".join(fb),
+                "details": {"elbow_angle": round(elbow, 1), "out_front": round(out_front, 4)},
+                "tip": tip if tip else "Solid contact point on the backhand. Keep meeting the ball out front."}
+
+    def _score_follow_through(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "follow_through")
+        if not frames:
+            return {"score": 55, "label": "Follow Through", "feedback": "Could not detect follow through.", "details": {}, "tip": "Record the full finish of the stroke."}
+
+        torso_leans = [abs(f.get("torso_lean", 0)) for f in frames]
+        max_lean = max(torso_leans) if torso_leans else 0
+        shoulder_angles = [f.get("shoulders_angle", 0) for f in frames]
+        rotation_range = (max(shoulder_angles) - min(shoulder_angles)) if len(shoulder_angles) > 1 else 0
+
+        if max_lean > 0.06 and rotation_range > 8:
+            score = 85
+        elif max_lean > 0.03 or rotation_range > 4:
+            score = 65
+        else:
+            score = 42
+
+        fb = []
+        tip = ""
+        if score < 55:
+            fb.append("Follow through is abbreviated. You're decelerating before fully finishing the swing.")
+            tip = "On the backhand, extend through the ball toward your target before letting the racket wrap around. For a two-hander, finish with both hands high. For a one-hander, extend the hitting arm fully toward the target, then let it wrap naturally."
+        elif score < 75:
+            fb.append("Moderate follow through. There's room for a fuller finish through the ball.")
+            tip = "Think about pushing the racket face toward your target for as long as possible before the natural wrap-around."
+        else:
+            fb.append("Full follow through with good extension through the contact zone.")
+
+        return {"score": score, "label": "Follow Through", "feedback": " ".join(fb),
+                "details": {"cross_body_lean": round(max_lean, 4), "rotation_range": round(rotation_range, 1)},
+                "tip": tip if tip else "Great follow through on the backhand."}
+
+    def _score_kinetic_chain(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "forward_swing_contact")
+        if len(frames) < 3:
+            return {"score": 55, "label": "Kinetic Chain", "feedback": "Not enough frames to assess the kinetic chain.", "details": {}, "tip": "Record with full body visible."}
+
+        hip_angles = [f.get("hips_angle", 0) for f in frames]
+        shoulder_angles = [f.get("shoulders_angle", 0) for f in frames]
+
+        def first_change(vals, thresh=2.0):
+            for i in range(1, len(vals)):
+                if abs(vals[i] - vals[i - 1]) > thresh:
+                    return i
+            return len(vals) - 1
+
+        hip_start = first_change(hip_angles)
+        sh_start = first_change(shoulder_angles)
+
+        if hip_start < sh_start:
+            seq_score = 88
+            seq_fb = "Good hip-to-shoulder sequence on the backhand. Your hips lead the rotation."
+        elif hip_start == sh_start:
+            seq_score = 62
+            seq_fb = "Hips and shoulders rotating together. More separation would add power."
+        else:
+            seq_score = 38
+            seq_fb = "Shoulders leading before hips — you're using your arms instead of your core."
+
+        knee_angles = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
+        knee_ext = knee_angles[-1] - knee_angles[0] if len(knee_angles) >= 2 else 0
+        knee_score = 85 if knee_ext > 8 else 60 if knee_ext > 3 else 38
+
+        combined = int(seq_score * 0.55 + knee_score * 0.45)
+        tip = ""
+        if seq_score < 55:
+            tip = "Start the forward swing from the hips. Your lower body should rotate first, pulling the torso and then the arms through. On the backhand this is especially important for generating power without over-using the arm."
+        elif knee_score < 50:
+            tip = "Use your legs more. Bend your knees during the backswing and drive upward through the ball. Your legs are the engine."
+        else:
+            tip = "Good kinetic chain. Hip-led rotation with leg drive."
+
+        return {"score": combined, "label": "Kinetic Chain", "feedback": f"{seq_fb} {'Good leg drive.' if knee_score >= 70 else 'Limited leg drive detected.'}",
+                "details": {"sequence": "hips_first" if hip_start < sh_start else "simultaneous" if hip_start == sh_start else "shoulders_first", "knee_extension": round(knee_ext, 1)},
+                "tip": tip}
+
+    def _score_athletic_base(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "preparation")
+        if not frames:
+            frames = frame_data[:max(3, len(frame_data) // 6)]
+        if not frames:
+            return {"score": 50, "label": "Athletic Base", "feedback": "Could not assess stance.", "details": {}, "tip": "Start in an athletic position with knees bent."}
+
+        knees = [min(f.get("r_knee_angle", 180), f.get("l_knee_angle", 180)) for f in frames]
+        avg_knee = sum(knees) / len(knees)
+        knee_score = self._score_in_range(avg_knee, "bh_knee_bend")
+
+        stances = [f.get("stance_ratio", 1.0) for f in frames]
+        avg_stance = sum(stances) / len(stances)
+        stance_score = self._score_in_range(avg_stance, "bh_stance_width")
+
+        combined = int(knee_score * 0.55 + stance_score * 0.45)
+
+        fb = f"Knee angle: {avg_knee:.0f}°. " + ("Good knee bend." if avg_knee < 155 else "Stand lower — more bend gives you more power and stability.")
+        tip = "Get low on the backhand. Bend your knees and feel your weight loaded on the balls of your feet." if combined < 70 else "Good athletic base."
+
+        return {"score": combined, "label": "Athletic Base", "feedback": fb,
+                "details": {"avg_knee_angle": round(avg_knee, 1), "avg_stance_ratio": round(avg_stance, 2)},
+                "tip": tip}
+
+
+# ==================== VOLLEY ANALYZER ====================
+
+class VolleyAnalyzer:
+    """
+    Biomechanical analysis of the tennis volley.
+    Model: compact, efficient motion. No big swings.
+
+    Components:
+    1. Ready Position — racket up, weight forward, knees bent
+    2. Shoulder Turn & Step — compact turn, step to ball (not swing)
+    3. Contact — firm wrist, punch through, racket face open
+    4. Recovery — back to ready position quickly
+    """
+
+    def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        results = {}
+        results["ready_position"] = self._score_ready(frame_data, phases)
+        results["shoulder_turn_step"] = self._score_turn_step(frame_data, phases)
+        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["recovery"] = self._score_recovery(frame_data, phases)
+
+        weights = {"ready_position": 0.25, "shoulder_turn_step": 0.25, "contact_point": 0.30, "recovery": 0.20}
+        overall = sum(results[k]["score"] * weights[k] for k in weights)
+        results["overall_score"] = round(overall)
+        return results
+
+    def _get_frames(self, frame_data, phases, name):
+        return [frame_data[i] for i in phases.get(name, []) if i < len(frame_data)]
+
+    def _score_ready(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "ready_position")
+        if not frames:
+            frames = frame_data[:max(2, len(frame_data) // 4)]
+        if not frames:
+            return {"score": 50, "label": "Ready Position", "feedback": "Could not assess ready position.", "details": {}, "tip": "Start with racket up, knees bent, weight forward."}
+
+        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
+        avg_knee = sum(knees) / len(knees)
+
+        # Racket should be up — wrist near or above shoulder height
+        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in frames]
+        avg_wrist_h = sum(wrist_heights) / len(wrist_heights)
+
+        knee_score = 85 if avg_knee < 155 else 60 if avg_knee < 165 else 35
+        # Wrist at or above shoulder level = racket is up
+        racket_up_score = 85 if avg_wrist_h > 0.01 else 60 if avg_wrist_h > -0.02 else 35
+
+        combined = int(knee_score * 0.50 + racket_up_score * 0.50)
+
+        fb = []
+        tip = ""
+        if knee_score < 55:
+            fb.append("Standing too upright at the net. Get lower with more knee bend.")
+            tip = "At the net, stay low with your knees bent and weight on the balls of your feet. You need to be ready to react quickly in any direction."
+        if racket_up_score < 55:
+            fb.append("Racket is too low in the ready position. Keep it up in front of you.")
+            if not tip:
+                tip = "Hold the racket up at chest level with the head above your wrist. At the net, there's no time to lift a low racket — it needs to already be in position."
+        if not fb:
+            fb.append("Good ready position — racket up, knees bent, ready to react.")
+
+        return {"score": combined, "label": "Ready Position", "feedback": " ".join(fb),
+                "details": {"avg_knee_angle": round(avg_knee, 1), "avg_wrist_height": round(avg_wrist_h, 4)},
+                "tip": tip if tip else "Solid ready position. Stay compact and alert at the net."}
+
+    def _score_turn_step(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "shoulder_turn_step")
+        if not frames:
+            return {"score": 55, "label": "Turn & Step", "feedback": "Could not detect the turn and step.", "details": {}, "tip": "Turn your shoulders, then step to the ball. Don't swing."}
+
+        # Shoulder rotation should be COMPACT — not a huge turn
+        shoulder_angles = [f.get("shoulders_angle", 0) for f in frames]
+        max_rotation = max(shoulder_angles) if shoulder_angles else 0
+
+        # For a volley, rotation should be moderate (15-40°), not huge like a groundstroke
+        if 15 <= max_rotation <= 40:
+            rotation_score = 90
+        elif 10 <= max_rotation <= 55:
+            rotation_score = 65
+        elif max_rotation > 55:
+            rotation_score = 35  # Too much backswing
+        else:
+            rotation_score = 45  # Too little preparation
+
+        # Check for excessive wrist drop (backswing too big)
+        drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames]
+        max_drop = max(drops) if drops else 0
+        if max_drop < 0.03:
+            compact_score = 90
+        elif max_drop < 0.06:
+            compact_score = 65
+        else:
+            compact_score = 35
+
+        combined = int(rotation_score * 0.50 + compact_score * 0.50)
+
+        fb = []
+        tip = ""
+        if max_rotation > 55:
+            fb.append(f"Too much shoulder rotation ({max_rotation:.0f}°). On a volley, this means you're swinging instead of punching.")
+            tip = "The volley is a compact punch, not a swing. Turn your shoulders just enough to set the racket face, then step forward and punch through the ball. Think 'catch and redirect' — not 'wind up and hit.'"
+        elif max_rotation < 10:
+            fb.append("Very little shoulder turn. Even on a volley, a small compact turn helps set the racket angle.")
+            tip = "Turn your shoulders just slightly to set the racket face to the ball. It's a small move — think of it as presenting the racket, not swinging it."
+        else:
+            fb.append("Good compact shoulder turn — just enough preparation without over-swinging.")
+
+        if compact_score < 55:
+            fb.append("The racket is dropping too much — your backswing is too big for a volley.")
+            if not tip:
+                tip = "Keep the racket head above your wrist at all times during the volley. No backswing. The power comes from the step forward, not the swing."
+
+        return {"score": combined, "label": "Turn & Step", "feedback": " ".join(fb),
+                "details": {"shoulder_rotation": round(max_rotation, 1), "max_racket_drop": round(max_drop, 4)},
+                "tip": tip if tip else "Compact turn and step. This is exactly what a volley should look like."}
+
+    def _score_contact(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "contact")
+        if not frames:
+            return {"score": 55, "label": "Contact", "feedback": "Could not detect contact point.", "details": {}, "tip": "Make contact out in front with a firm wrist."}
+
+        cf = frames[0]
+        out_front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+
+        # For a volley, contact should be well in front
+        if out_front > 0.10:
+            front_score = 90
+        elif out_front > 0.06:
+            front_score = 65
+        else:
+            front_score = 35
+
+        # Wrist firmness — elbow angle should be fairly stable (not whipping)
+        elbow = min(cf.get("r_elbow_angle", 180), cf.get("l_elbow_angle", 180))
+        if 120 <= elbow <= 160:
+            firm_score = 85
+        elif 110 <= elbow <= 170:
+            firm_score = 60
+        else:
+            firm_score = 40
+
+        combined = int(front_score * 0.55 + firm_score * 0.45)
+
+        fb = []
+        tip = ""
+        if front_score < 55:
+            fb.append("Contact point is too close to your body. The ball is jamming you.")
+            tip = "Reach out and make contact in front of your lead foot. On a volley, the further in front you contact the ball, the more control and angle you have. Step TO the ball."
+        else:
+            fb.append("Contact well out in front — this gives you control and offensive angle options.")
+
+        if firm_score < 55:
+            fb.append("Your wrist appears to be breaking down at contact. A volley needs a firm, stable wrist.")
+            if not tip:
+                tip = "Lock your wrist at contact. The volley is all about a firm wrist and stable racket face. Think of your hand, wrist, and racket as one solid unit."
+
+        return {"score": combined, "label": "Contact", "feedback": " ".join(fb),
+                "details": {"out_front": round(out_front, 4), "elbow_angle": round(elbow, 1)},
+                "tip": tip if tip else "Clean contact — out front with a firm wrist. That's a good volley."}
+
+    def _score_recovery(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "recovery")
+        if not frames:
+            return {"score": 60, "label": "Recovery", "feedback": "Could not assess recovery.", "details": {}, "tip": "After the volley, get back to ready position immediately."}
+
+        # Check if the player returns to an athletic stance
+        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
+        final_knee = knees[-1] if knees else 170
+        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in frames]
+        final_wrist_h = wrist_heights[-1] if wrist_heights else 0
+
+        knee_score = 80 if final_knee < 155 else 55 if final_knee < 165 else 35
+        racket_score = 80 if final_wrist_h > 0.0 else 55 if final_wrist_h > -0.03 else 35
+
+        combined = int(knee_score * 0.50 + racket_score * 0.50)
+
+        fb = "Good recovery back to ready." if combined >= 70 else "Recovery could be quicker — get the racket back up and knees bent after the volley."
+        tip = "After every volley, immediately return to your ready position — racket up, knees bent, eyes forward. The point isn't over until it's over." if combined < 70 else "Quick recovery. You're ready for the next ball."
+
+        return {"score": combined, "label": "Recovery", "feedback": fb,
+                "details": {"final_knee_angle": round(final_knee, 1)},
+                "tip": tip}
+
+
+# ==================== PICKLEBALL ANALYZERS ====================
+
+class PickleballDinkAnalyzer:
+    """
+    Analysis of the pickleball dink — soft, controlled shot at the kitchen line.
+    Key: compact motion, soft hands, paddle face control, balance.
+    """
+
+    def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        results = {}
+        results["preparation"] = self._score_prep(frame_data, phases)
+        results["paddle_control"] = self._score_paddle_control(frame_data, phases)
+        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["balance_stability"] = self._score_balance(frame_data, phases)
+
+        weights = {"preparation": 0.20, "paddle_control": 0.25, "contact_point": 0.30, "balance_stability": 0.25}
+        overall = sum(results[k]["score"] * weights[k] for k in weights)
+        results["overall_score"] = round(overall)
+        return results
+
+    def _get_frames(self, frame_data, phases, name):
+        return [frame_data[i] for i in phases.get(name, []) if i < len(frame_data)]
+
+    def _score_prep(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "preparation")
+        if not frames:
+            frames = frame_data[:max(2, len(frame_data) // 4)]
+        if not frames:
+            return {"score": 50, "label": "Preparation", "feedback": "Could not assess ready position.", "details": {}, "tip": "Start low with paddle up in front."}
+
+        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
+        avg_knee = sum(knees) / len(knees)
+        score = 85 if avg_knee < 145 else 65 if avg_knee < 160 else 38
+
+        fb = f"Knee angle: {avg_knee:.0f}°. " + ("Good low stance for dinking." if score >= 70 else "Get lower — dinking requires you to get down to the ball, not reach down for it.")
+        tip = "Bend your knees deeply for dinks. The dink is played low, so your body needs to be low. Bend at the knees, not at the waist." if score < 70 else "Good low ready position for dinking."
+
+        return {"score": score, "label": "Preparation", "feedback": fb, "details": {"avg_knee_angle": round(avg_knee, 1)}, "tip": tip}
+
+    def _score_paddle_control(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "backswing")
+        if not frames:
+            frames = frame_data[:len(frame_data) // 2]
+        if not frames:
+            return {"score": 55, "label": "Paddle Control", "feedback": "Could not assess paddle motion.", "details": {}, "tip": "Keep the backswing very short on dinks."}
+
+        # Dinks should have MINIMAL backswing — very compact
+        drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames]
+        max_drop = max(drops) if drops else 0
+
+        xfactors = [f.get("xfactor", 0) for f in frames]
+        max_xf = max(xfactors) if xfactors else 0
+
+        # For dinks, less is more
+        drop_score = 90 if max_drop < 0.03 else 65 if max_drop < 0.06 else 35
+        rotation_score = 90 if max_xf < 15 else 65 if max_xf < 25 else 35
+
+        combined = int(drop_score * 0.50 + rotation_score * 0.50)
+
+        fb = []
+        tip = ""
+        if max_drop > 0.06:
+            fb.append("Too much backswing for a dink. The paddle is dropping too far back.")
+            tip = "The dink is a touch shot — almost no backswing. Think of pushing the ball with a pendulum motion from the shoulder, not swinging the paddle. Less is more."
+        elif max_xf > 25:
+            fb.append("Excessive body rotation for a dink. Keep it simple and compact.")
+            if not tip:
+                tip = "Don't rotate your body on a dink. The motion should come from the shoulder and wrist, with your body staying quiet and stable."
+        else:
+            fb.append("Compact, controlled paddle motion. This is what a dink should look like.")
+
+        return {"score": combined, "label": "Paddle Control", "feedback": " ".join(fb),
+                "details": {"max_paddle_drop": round(max_drop, 4), "max_rotation": round(max_xf, 1)},
+                "tip": tip if tip else "Great paddle control. Soft hands, minimal backswing."}
+
+    def _score_contact(self, frame_data, phases):
+        frames = self._get_frames(frame_data, phases, "forward_swing_contact")
+        if not frames:
+            return {"score": 55, "label": "Contact Point", "feedback": "Could not detect contact.", "details": {}, "tip": "Contact the ball out in front at kitchen line height."}
+
+        cf = frames[-1] if frames else frames[0]
+        out_front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        front_score = 85 if out_front > 0.06 else 60 if out_front > 0.03 else 35
+
+        fb = "Contact well out in front — good positioning for the dink." if front_score >= 70 else "Contact point is too close to your body. Step in and dink with the paddle out in front."
+        tip = "Make contact in front of your body with the paddle face slightly open. This gives you control and the ability to direct the dink cross-court or down the line." if front_score < 70 else "Clean dink contact. Out front with a controlled face."
+
+        return {"score": front_score, "label": "Contact Point", "feedback": fb,
+                "details": {"out_front": round(out_front, 4)}, "tip": tip}
+
+    def _score_balance(self, frame_data, phases):
+        # Check stability across all frames
+        if len(frame_data) < 3:
+            return {"score": 55, "label": "Balance & Stability", "feedback": "Not enough frames to assess balance.", "details": {}, "tip": "Stay balanced through the dink."}
+
+        weight_shifts = [f.get("weight_shift_x", 0) for f in frame_data if f]
+        if not weight_shifts:
+            return {"score": 55, "label": "Balance & Stability", "feedback": "Could not assess balance.", "details": {}, "tip": "Stay centered and balanced."}
+
+        mean_shift = sum(weight_shifts) / len(weight_shifts)
+        variance = sum((w - mean_shift) ** 2 for w in weight_shifts) / len(weight_shifts)
+        score = 85 if variance < 0.0005 else 65 if variance < 0.002 else 40
+
+        fb = "Stable and balanced through the dink." if score >= 70 else "Your weight is shifting too much. Stay centered over your base during dinks."
+        tip = "Dinking is about stillness and control. Your upper body should stay quiet while the paddle does the work. If you're off-balance, you'll pop the ball up." if score < 70 else "Excellent balance. Quiet body, soft hands."
+
+        return {"score": score, "label": "Balance & Stability", "feedback": fb,
+                "details": {"weight_variance": round(variance, 6)}, "tip": tip}
+
+
+class PickleballDriveAnalyzer:
+    """
+    Analysis of the pickleball drive — aggressive groundstroke.
+    Similar to tennis forehand but more compact. Less backswing, quicker hands.
+    """
+
+    def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        results = {}
+        results["preparation"] = self._score_prep(frame_data, phases)
+        results["backswing"] = self._score_backswing(frame_data, phases)
+        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["follow_through"] = self._score_follow_through(frame_data, phases)
+
+        weights = {"preparation": 0.20, "backswing": 0.20, "contact_point": 0.35, "follow_through": 0.25}
+        overall = sum(results[k]["score"] * weights[k] for k in weights)
+        results["overall_score"] = round(overall)
+        return results
+
+    def _get_frames(self, fd, ph, name):
+        return [fd[i] for i in ph.get(name, []) if i < len(fd)]
+
+    def _score_prep(self, fd, ph):
+        frames = self._get_frames(fd, ph, "preparation") or fd[:max(2, len(fd) // 4)]
+        if not frames:
+            return {"score": 50, "label": "Ready Position", "feedback": "Could not assess.", "details": {}, "tip": "Start in athletic position, paddle up."}
+        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
+        avg = sum(knees) / len(knees)
+        score = 85 if avg < 155 else 60 if avg < 165 else 35
+        return {"score": score, "label": "Ready Position", "feedback": f"Knee angle: {avg:.0f}°. {'Athletic stance.' if score >= 70 else 'Get lower.'}",
+                "details": {"avg_knee": round(avg, 1)}, "tip": "Bend your knees and stay low. Quick hands start with a low, ready base." if score < 70 else "Good athletic base."}
+
+    def _score_backswing(self, fd, ph):
+        frames = self._get_frames(fd, ph, "backswing")
+        if not frames:
+            return {"score": 55, "label": "Backswing", "feedback": "Could not detect backswing.", "details": {}, "tip": "Keep the backswing compact."}
+        xfs = [f.get("xfactor", 0) for f in frames]
+        max_xf = max(xfs) if xfs else 0
+        # Pickleball drive backswing should be compact (10-25° rotation, not 40+)
+        if 10 <= max_xf <= 25:
+            score = 88
+            fb = "Compact, efficient backswing. Perfect for pickleball."
+        elif max_xf < 10:
+            score = 55
+            fb = "Very little body rotation. A small turn adds power even in pickleball."
+        else:
+            score = 45
+            fb = f"Backswing is too big ({max_xf:.0f}° rotation). In pickleball, you don't have time for a tennis-sized backswing."
+
+        tip = "Keep the backswing short and compact. Pickleball is played at a faster pace with less time — a big backswing means late contact." if score < 70 else "Perfect backswing size for pickleball. Compact and efficient."
+        return {"score": score, "label": "Backswing", "feedback": fb, "details": {"rotation": round(max_xf, 1)}, "tip": tip}
+
+    def _score_contact(self, fd, ph):
+        frames = self._get_frames(fd, ph, "forward_swing_contact")
+        if not frames:
+            return {"score": 55, "label": "Contact Point", "feedback": "Could not detect contact.", "details": {}, "tip": "Make contact out in front."}
+        cf = frames[-1]
+        front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        score = 88 if front > 0.08 else 65 if front > 0.04 else 38
+        fb = "Contact well out in front." if score >= 70 else "Contact is too deep. Step in and meet the ball earlier."
+        tip = "On a pickleball drive, contact out front is everything. It determines your ability to hit with pace and control the direction." if score < 70 else "Great contact point on the drive."
+        return {"score": score, "label": "Contact Point", "feedback": fb, "details": {"out_front": round(front, 4)}, "tip": tip}
+
+    def _score_follow_through(self, fd, ph):
+        frames = self._get_frames(fd, ph, "follow_through")
+        if not frames:
+            return {"score": 55, "label": "Follow Through", "feedback": "Could not detect follow through.", "details": {}, "tip": "Follow through toward your target."}
+        leans = [abs(f.get("torso_lean", 0)) for f in frames]
+        max_lean = max(leans) if leans else 0
+        # Pickleball follow through should be controlled, not wild
+        score = 85 if 0.02 < max_lean < 0.12 else 60 if max_lean <= 0.02 else 50
+        fb = "Controlled follow through." if score >= 70 else "Follow through needs work — either too short or too extended."
+        tip = "In pickleball, the follow through should be controlled and directed toward your target. Don't chop it short, but don't over-swing either. Think 'smooth and directed.'" if score < 70 else "Good controlled follow through on the drive."
+        return {"score": score, "label": "Follow Through", "feedback": fb, "details": {"max_lean": round(max_lean, 4)}, "tip": tip}
+
+
+class PickleballServeAnalyzer:
+    """
+    Analysis of the pickleball serve — underhand motion.
+    Must be below the waist at contact. Smooth pendulum motion.
+    """
+
+    def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        results = {}
+        results["stance"] = self._score_stance(frame_data, phases)
+        results["pendulum_motion"] = self._score_pendulum(frame_data, phases)
+        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["follow_through"] = self._score_follow_through(frame_data, phases)
+
+        weights = {"stance": 0.20, "pendulum_motion": 0.25, "contact_point": 0.30, "follow_through": 0.25}
+        overall = sum(results[k]["score"] * weights[k] for k in weights)
+        results["overall_score"] = round(overall)
+        return results
+
+    def _get_frames(self, fd, ph, name):
+        return [fd[i] for i in ph.get(name, []) if i < len(fd)]
+
+    def _score_stance(self, fd, ph):
+        frames = self._get_frames(fd, ph, "preparation") or fd[:max(2, len(fd) // 4)]
+        if not frames:
+            return {"score": 50, "label": "Stance", "feedback": "Could not assess stance.", "details": {}, "tip": "Stand with feet shoulder width, weight balanced."}
+        stances = [f.get("stance_ratio", 1.0) for f in frames]
+        avg = sum(stances) / len(stances)
+        score = 85 if 1.0 <= avg <= 1.5 else 60 if 0.8 <= avg <= 1.8 else 35
+        return {"score": score, "label": "Stance", "feedback": f"Stance ratio: {avg:.1f}. {'Good balanced stance.' if score >= 70 else 'Adjust your foot spacing.'}",
+                "details": {"stance_ratio": round(avg, 2)}, "tip": "Feet about shoulder width apart, weight slightly forward. A stable base makes the serve consistent." if score < 70 else "Solid serving stance."}
+
+    def _score_pendulum(self, fd, ph):
+        frames = self._get_frames(fd, ph, "backswing") or fd[:len(fd) // 2]
+        if not frames:
+            return {"score": 55, "label": "Pendulum Motion", "feedback": "Could not assess swing path.", "details": {}, "tip": "Swing the paddle like a pendulum from the shoulder."}
+        drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames]
+        max_drop = max(drops) if drops else 0
+        xfs = [f.get("xfactor", 0) for f in frames]
+        max_xf = max(xfs) if xfs else 0
+        drop_ok = 85 if max_drop > 0.02 else 55
+        rotation_ok = 85 if max_xf < 20 else 55  # Minimal rotation for underhand serve
+        combined = int(drop_ok * 0.50 + rotation_ok * 0.50)
+        fb = "Good pendulum motion." if combined >= 70 else "The serve motion should be a smooth, relaxed pendulum from the shoulder."
+        tip = "Think of your paddle arm as a pendulum swinging from the shoulder. Smooth and relaxed — no wrist flick or big body rotation. The consistency of your serve comes from the simplicity of this motion." if combined < 70 else "Clean pendulum motion on the serve."
+        return {"score": combined, "label": "Pendulum Motion", "feedback": fb, "details": {"paddle_drop": round(max_drop, 4), "rotation": round(max_xf, 1)}, "tip": tip}
+
+    def _score_contact(self, fd, ph):
+        frames = self._get_frames(fd, ph, "forward_swing_contact")
+        if not frames:
+            return {"score": 55, "label": "Contact Point", "feedback": "Could not detect contact.", "details": {}, "tip": "Contact must be below the waist on a pickleball serve."}
+        cf = frames[-1] if frames else frames[0]
+        # Wrist should be BELOW shoulder at contact (underhand = wrist low)
+        r_h = cf.get("r_wrist_height", 0)
+        l_h = cf.get("l_wrist_height", 0)
+        # Negative wrist height = below shoulder level (good for underhand)
+        wrist_h = min(r_h, l_h)
+        below_waist = 85 if wrist_h < -0.05 else 60 if wrist_h < 0.0 else 30
+        front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        front_score = 85 if front > 0.05 else 60 if front > 0.02 else 35
+        combined = int(below_waist * 0.55 + front_score * 0.45)
+        fb = "Contact below the waist and out front." if combined >= 70 else "Check your contact height — must be below the waist, and out in front of you."
+        tip = "The rules require contact below the waist. Focus on meeting the ball cleanly at waist level and out in front of your body." if combined < 70 else "Good contact point — legal and well-positioned."
+        return {"score": combined, "label": "Contact Point", "feedback": fb, "details": {"wrist_height": round(wrist_h, 4), "out_front": round(front, 4)}, "tip": tip}
+
+    def _score_follow_through(self, fd, ph):
+        frames = self._get_frames(fd, ph, "follow_through")
+        if not frames:
+            return {"score": 55, "label": "Follow Through", "feedback": "Could not detect follow through.", "details": {}, "tip": "Follow through toward your target."}
+        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in frames]
+        peak_h = max(wrist_heights) if wrist_heights else 0
+        # Paddle should rise after contact (low to high)
+        score = 85 if peak_h > 0.03 else 60 if peak_h > 0.0 else 40
+        fb = "Good upward follow through." if score >= 70 else "Follow through should continue upward toward your target after contact."
+        tip = "After contact, let the paddle continue upward toward your target. A smooth low-to-high follow through adds depth and consistency to your serve." if score < 70 else "Smooth follow through. Paddle finishes high toward the target."
+        return {"score": score, "label": "Follow Through", "feedback": fb, "details": {"peak_wrist_height": round(peak_h, 4)}, "tip": tip}
+
+
+class PickleballThirdShotDropAnalyzer:
+    """
+    Analysis of the third shot drop — the most important shot in pickleball.
+    Soft, arcing shot from the baseline to the kitchen. Requires touch and control.
+    Very similar to the dink but with more arc and from further back.
+    """
+
+    def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        results = {}
+        results["preparation"] = self._score_prep(frame_data, phases)
+        results["soft_hands"] = self._score_soft_hands(frame_data, phases)
+        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["follow_through"] = self._score_follow_through(frame_data, phases)
+
+        weights = {"preparation": 0.20, "soft_hands": 0.30, "contact_point": 0.25, "follow_through": 0.25}
+        overall = sum(results[k]["score"] * weights[k] for k in weights)
+        results["overall_score"] = round(overall)
+        return results
+
+    def _get_frames(self, fd, ph, name):
+        return [fd[i] for i in ph.get(name, []) if i < len(fd)]
+
+    def _score_prep(self, fd, ph):
+        frames = self._get_frames(fd, ph, "preparation") or fd[:max(2, len(fd) // 4)]
+        if not frames:
+            return {"score": 50, "label": "Preparation", "feedback": "Could not assess.", "details": {}, "tip": "Get low and prepare early."}
+        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
+        avg = sum(knees) / len(knees)
+        score = 85 if avg < 150 else 60 if avg < 165 else 35
+        return {"score": score, "label": "Preparation", "feedback": f"Knee angle: {avg:.0f}°. {'Good low position.' if score >= 70 else 'Get lower for the drop shot.'}",
+                "details": {"avg_knee": round(avg, 1)}, "tip": "The third shot drop requires you to get low. Bend your knees deeply — you're trying to lift a ball with arc and touch from the baseline." if score < 70 else "Low, ready position. Perfect for the drop."}
+
+    def _score_soft_hands(self, fd, ph):
+        frames = self._get_frames(fd, ph, "backswing") + self._get_frames(fd, ph, "forward_swing_contact")
+        if not frames:
+            return {"score": 55, "label": "Soft Hands", "feedback": "Could not assess paddle motion.", "details": {}, "tip": "Keep the motion soft and controlled — this is a touch shot."}
+        drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames]
+        max_drop = max(drops) if drops else 0
+        xfs = [f.get("xfactor", 0) for f in frames]
+        max_xf = max(xfs) if xfs else 0
+
+        # Third shot drop should have minimal backswing and very controlled motion
+        drop_ok = 88 if max_drop < 0.04 else 60 if max_drop < 0.07 else 35
+        rotation_ok = 88 if max_xf < 18 else 60 if max_xf < 30 else 35
+        combined = int(drop_ok * 0.50 + rotation_ok * 0.50)
+
+        fb = "Soft, controlled motion — good touch." if combined >= 70 else "Too much swing. The third shot drop is a finesse shot — dial back the power and focus on feel."
+        tip = "The third shot drop is NOT a drive. Use a gentle lifting motion, almost like scooping the ball over the net with arc. Soft grip, soft hands, smooth pendulum. The less you swing, the more control you have." if combined < 70 else "Excellent touch and control. Soft hands are the key to a great drop shot."
+        return {"score": combined, "label": "Soft Hands", "feedback": fb, "details": {"max_drop": round(max_drop, 4), "rotation": round(max_xf, 1)}, "tip": tip}
+
+    def _score_contact(self, fd, ph):
+        frames = self._get_frames(fd, ph, "forward_swing_contact")
+        if not frames:
+            return {"score": 55, "label": "Contact Point", "feedback": "Could not detect contact.", "details": {}, "tip": "Contact below the net height with an open paddle face."}
+        cf = frames[-1] if frames else frames[0]
+        front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        score = 85 if front > 0.05 else 60 if front > 0.02 else 35
+        fb = "Contact out front." if score >= 70 else "Meet the ball further out in front for better control of the arc."
+        tip = "Contact the ball out front of your body with an open paddle face. You're lifting the ball up and over the net with arc — not pushing it flat." if score < 70 else "Good contact position for the drop."
+        return {"score": score, "label": "Contact Point", "feedback": fb, "details": {"out_front": round(front, 4)}, "tip": tip}
+
+    def _score_follow_through(self, fd, ph):
+        frames = self._get_frames(fd, ph, "follow_through")
+        if not frames:
+            return {"score": 55, "label": "Follow Through", "feedback": "Could not detect follow through.", "details": {}, "tip": "Follow through upward with a lifting motion."}
+        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in frames]
+        peak = max(wrist_heights) if wrist_heights else 0
+        score = 85 if peak > 0.02 else 60 if peak > 0.0 else 40
+        fb = "Good lifting follow through — paddle finishes high, creating arc." if score >= 70 else "The follow through should lift upward to create the arc needed on the drop."
+        tip = "After contact, let the paddle continue upward. The arc on the third shot drop comes from this lifting follow through. Think 'low to high, soft and slow.'" if score < 70 else "Great follow through. The lift creates the arc you need to land the ball softly in the kitchen."
+        return {"score": score, "label": "Follow Through", "feedback": fb, "details": {"peak_height": round(peak, 4)}, "tip": tip}
 
 
 # ==================== FOREHAND ANALYZER ====================
@@ -1903,6 +2798,12 @@ pose_analyzer = PoseAnalyzer()
 phase_detector = StrokePhaseDetector()
 forehand_analyzer = ForehandAnalyzer()
 serve_analyzer = ServeAnalyzer()
+backhand_analyzer = BackhandAnalyzer()
+volley_analyzer = VolleyAnalyzer()
+pb_dink_analyzer = PickleballDinkAnalyzer()
+pb_drive_analyzer = PickleballDriveAnalyzer()
+pb_serve_analyzer = PickleballServeAnalyzer()
+pb_drop_analyzer = PickleballThirdShotDropAnalyzer()
 
 
 # ==================== RESULT FORMATTING ====================
@@ -1920,11 +2821,23 @@ def format_analysis_result(
     PHASE_KEYS = {
         "forehand": ["unit_turn", "racket_drop", "contact_point", "follow_through", "kinetic_chain", "athletic_base"],
         "serve": ["unit_turn_coil", "ball_toss", "knee_bend_leg_drive", "trophy_racket_drop", "contact_point", "follow_through", "platform_stance"],
+        "backhand": ["unit_turn", "racket_drop", "contact_point", "follow_through", "kinetic_chain", "athletic_base"],
+        "volley": ["ready_position", "shoulder_turn_step", "contact_point", "recovery"],
+        "dink": ["preparation", "paddle_control", "contact_point", "balance_stability"],
+        "drive": ["preparation", "backswing", "contact_point", "follow_through"],
+        "pb_serve": ["stance", "pendulum_motion", "contact_point", "follow_through"],
+        "third_shot_drop": ["preparation", "soft_hands", "contact_point", "follow_through"],
     }
 
     MODEL_REFS = {
         "forehand": "Sinner forehand",
         "serve": "Sampras serve",
+        "backhand": "Pro backhand composite",
+        "volley": "Net volley fundamentals",
+        "dink": "Pickleball dink fundamentals",
+        "drive": "Pickleball drive",
+        "pb_serve": "Pickleball serve",
+        "third_shot_drop": "Third shot drop",
     }
 
     phase_keys = PHASE_KEYS.get(stroke_type, PHASE_KEYS["forehand"])
@@ -1981,9 +2894,9 @@ def format_analysis_result(
 async def root():
     return {
         "name": "Court Evolution Stroke Analyzer",
-        "version": "2.1.0",
+        "version": "3.0.0",
         "status": "running",
-        "analysis_engine": "Biomechanical v2.1 — Forehand (Sinner model) + Serve (Sampras model)",
+        "analysis_engine": "Biomechanical v3 — All strokes modeled: Tennis (Forehand/Backhand/Serve/Volley) + Pickleball (Dink/Drive/Serve/Third Shot Drop)",
         "endpoints": {
             "analyze_video": "/api/analyze/video",
             "analyze_frame": "/api/analyze/frame",
@@ -1998,15 +2911,15 @@ async def get_stroke_types():
     return {
         "tennis": [
             {"id": "forehand", "name": "Forehand", "description": "Forehand groundstroke — analyzed against Sinner model"},
-            {"id": "backhand", "name": "Backhand", "description": "One or two-handed backhand"},
+            {"id": "backhand", "name": "Backhand", "description": "One or two-handed backhand — Djokovic/Federer composite"},
             {"id": "serve", "name": "Serve", "description": "First or second serve — analyzed against Sampras model"},
-            {"id": "volley", "name": "Volley", "description": "Net volley"},
+            {"id": "volley", "name": "Volley", "description": "Net volley — compact punch technique"},
         ],
         "pickleball": [
-            {"id": "dink", "name": "Dink", "description": "Soft shot at the kitchen"},
-            {"id": "drive", "name": "Drive", "description": "Hard groundstroke"},
-            {"id": "serve", "name": "Serve", "description": "Underhand serve"},
-            {"id": "third_shot_drop", "name": "Third Shot Drop", "description": "Soft return to kitchen"},
+            {"id": "dink", "name": "Dink", "description": "Soft kitchen shot — touch and control analysis"},
+            {"id": "drive", "name": "Drive", "description": "Aggressive groundstroke — compact power"},
+            {"id": "serve", "name": "Serve", "description": "Underhand serve — pendulum motion and contact legality"},
+            {"id": "third_shot_drop", "name": "Third Shot Drop", "description": "Baseline to kitchen drop — finesse and arc"},
         ],
     }
 
@@ -2109,17 +3022,43 @@ async def analyze_video(
         analysis_id = str(uuid.uuid4())[:8]
 
         if sport == "tennis" and stroke_type == "forehand":
-            # Detect phases
             phases = phase_detector.detect_forehand_phases(detected_angles)
-            # Run biomechanical analysis
             phase_results = forehand_analyzer.analyze(detected_angles, phases)
             overall = phase_results.pop("overall_score", 50)
 
         elif sport == "tennis" and stroke_type == "serve":
-            # Detect serve phases
             phases = phase_detector.detect_serve_phases(detected_angles)
-            # Run serve-specific biomechanical analysis
             phase_results = serve_analyzer.analyze(detected_angles, phases)
+            overall = phase_results.pop("overall_score", 50)
+
+        elif sport == "tennis" and stroke_type == "backhand":
+            phases = phase_detector.detect_backhand_phases(detected_angles)
+            phase_results = backhand_analyzer.analyze(detected_angles, phases)
+            overall = phase_results.pop("overall_score", 50)
+
+        elif sport == "tennis" and stroke_type == "volley":
+            phases = phase_detector.detect_volley_phases(detected_angles)
+            phase_results = volley_analyzer.analyze(detected_angles, phases)
+            overall = phase_results.pop("overall_score", 50)
+
+        elif sport == "pickleball" and stroke_type == "dink":
+            phases = phase_detector.detect_pickleball_groundstroke_phases(detected_angles)
+            phase_results = pb_dink_analyzer.analyze(detected_angles, phases)
+            overall = phase_results.pop("overall_score", 50)
+
+        elif sport == "pickleball" and stroke_type == "drive":
+            phases = phase_detector.detect_pickleball_groundstroke_phases(detected_angles)
+            phase_results = pb_drive_analyzer.analyze(detected_angles, phases)
+            overall = phase_results.pop("overall_score", 50)
+
+        elif sport == "pickleball" and stroke_type == "serve":
+            phases = phase_detector.detect_pickleball_groundstroke_phases(detected_angles)
+            phase_results = pb_serve_analyzer.analyze(detected_angles, phases)
+            overall = phase_results.pop("overall_score", 50)
+
+        elif sport == "pickleball" and stroke_type == "third_shot_drop":
+            phases = phase_detector.detect_pickleball_groundstroke_phases(detected_angles)
+            phase_results = pb_drop_analyzer.analyze(detected_angles, phases)
             overall = phase_results.pop("overall_score", 50)
 
         else:
