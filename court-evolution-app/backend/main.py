@@ -1325,47 +1325,80 @@ class ServeAnalyzer:
 
 class BackhandAnalyzer:
     """
-    Biomechanical analysis of the tennis backhand.
-    Handles both one-handed and two-handed patterns.
+    Biomechanical analysis of the two-handed tennis backhand based on
+    the Novak Djokovic model — the gold standard for a two-handed backhand.
 
-    Model reference: Novak Djokovic (two-handed), 
-    Roger Federer (one-handed) as composite benchmarks.
+    Djokovic's backhand is defined by:
+    - Early preparation (turns earlier than almost anyone on tour)
+    - Elite balance
+    - Compact mechanics
+    - Stable contact point (one of the most consistent in tennis history)
+    - Efficient acceleration via moderate low-to-high path
+    - Minimalistic follow-through — no wasted motion
 
-    Components:
-    1. Unit Turn — shoulders rotate, lead shoulder points to ball
-    2. Racket Slot / Drop — racket drops into low-to-high slot
-    3. Contact Point — out front, arm(s) extended, balanced
-    4. Follow Through — extension toward target, then wrap/finish
-    5. Kinetic Chain — hip-shoulder sequence, weight transfer
-    6. Athletic Base — stance width, knee bend
+    Components analyzed:
+    1. Unit Turn — immediate, compact, ~90° shoulders, racket stays in front of chest
+    2. Racket Drop — 6-12 inches below ball, relaxed wrists, clean and symmetrical
+    3. Contact Point — in front of lead hip, left arm extended, right arm bent, head still
+    4. Low-to-High Swing Path — moderate vertical path, driven by legs + torso + left arm pull
+    5. Follow Through — compact across body, racket near right shoulder, balanced feet
+    6. Balance & Recovery — elite balance through all phases, feet stay grounded
     """
 
     BENCHMARKS = {
-        "bh_peak_xfactor": (12, 20, 35, 48),
-        "bh_shoulder_rotation": (25, 40, 65, 80),
-        "bh_wrist_drop": (0.01, 0.03, 0.09, 0.14),
-        "bh_contact_elbow": (130, 145, 170, 180),
-        "bh_contact_out_front": (0.05, 0.08, 0.18, 0.25),
+        # X-Factor: shoulder-hip separation at peak turn
+        # Djokovic: ~20-35° separation. His hips rotate slightly less than shoulders.
+        "bh_peak_xfactor": (12, 20, 38, 50),
+
+        # Shoulder rotation at peak turn (~90° from baseline when viewed from side)
+        # In our measurement, this shows as the shoulder line angle from horizontal
+        "bh_shoulder_rotation": (30, 50, 80, 95),
+
+        # Racket drop below ball (wrist below elbow, normalized)
+        # Djokovic: 6-12 inches → ~0.03-0.08 in normalized coordinates
+        "bh_wrist_drop": (0.015, 0.03, 0.08, 0.12),
+
+        # Left arm extension at contact (top hand does the work)
+        # Left arm should be almost fully extended: ~155-175°
+        "bh_left_arm_extension": (135, 155, 175, 180),
+
+        # Right arm (support hand) should be bent at contact: ~90-130°
+        "bh_right_arm_bent": (75, 90, 130, 150),
+
+        # Contact out front of lead hip (normalized)
+        "bh_contact_out_front": (0.04, 0.08, 0.18, 0.24),
+
+        # Knee bend during preparation (athletic stance)
         "bh_knee_bend": (115, 130, 155, 170),
+
+        # Stance width at preparation
         "bh_stance_width": (1.0, 1.2, 1.8, 2.2),
     }
 
     def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """Run full Djokovic backhand analysis."""
         results = {}
+
         results["unit_turn"] = self._score_unit_turn(frame_data, phases)
         results["racket_drop"] = self._score_racket_drop(frame_data, phases)
-        results["contact_point"] = self._score_contact(frame_data, phases)
+        results["contact_point"] = self._score_contact_point(frame_data, phases)
+        results["swing_path"] = self._score_swing_path(frame_data, phases)
         results["follow_through"] = self._score_follow_through(frame_data, phases)
-        results["kinetic_chain"] = self._score_kinetic_chain(frame_data, phases)
-        results["athletic_base"] = self._score_athletic_base(frame_data, phases)
+        results["balance_recovery"] = self._score_balance(frame_data, phases)
 
-        weights = {"unit_turn": 0.20, "racket_drop": 0.12, "contact_point": 0.25,
-                    "follow_through": 0.15, "kinetic_chain": 0.15, "athletic_base": 0.13}
+        weights = {
+            "unit_turn": 0.20,
+            "racket_drop": 0.13,
+            "contact_point": 0.25,
+            "swing_path": 0.15,
+            "follow_through": 0.14,
+            "balance_recovery": 0.13,
+        }
         overall = sum(results[k]["score"] * weights[k] for k in weights)
         results["overall_score"] = round(overall)
         return results
 
-    def _score_in_range(self, value, key):
+    def _score_in_range(self, value: float, key: str) -> int:
         if key not in self.BENCHMARKS:
             return 50
         mn, il, ih, mx = self.BENCHMARKS[key]
@@ -1383,211 +1416,607 @@ class BackhandAnalyzer:
     def _get_frames(self, frame_data, phases, name):
         return [frame_data[i] for i in phases.get(name, []) if i < len(frame_data)]
 
-    def _score_unit_turn(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "unit_turn")
-        if not frames:
-            return {"score": 50, "label": "Unit Turn", "feedback": "Could not detect unit turn.", "details": {}, "tip": "Record from a side angle to capture shoulder rotation."}
+    # ===== 1. UNIT TURN =====
 
-        peak_xf = max(f.get("xfactor", 0) for f in frames)
+    def _score_unit_turn(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Djokovic initiates the unit turn immediately upon recognition.
+        Shoulders rotate ~90°, hips slightly less, creating early torso-pelvis separation.
+        The racket stays in front of the chest during the first frames of the turn.
+        The non-dominant hand stays on the racket, guiding preparation.
+
+        Signature trait: He turns EARLIER than almost anyone on tour — this is why
+        he handles pace so effortlessly.
+        """
+        turn_frames = self._get_frames(frame_data, phases, "unit_turn")
+        if not turn_frames:
+            return {
+                "score": 50, "label": "Unit Turn",
+                "feedback": "Could not detect unit turn phase. Record from a side angle to capture shoulder rotation.",
+                "details": {}, "tip": "Position the camera at a 45° angle so your full shoulder turn is visible."
+            }
+
+        # Peak X-factor (shoulder-hip separation)
+        peak_xf = max(f.get("xfactor", 0) for f in turn_frames)
         xf_score = self._score_in_range(peak_xf, "bh_peak_xfactor")
-        peak_shoulder = max(f.get("shoulders_angle", 0) for f in frames)
+
+        # Shoulder rotation depth
+        peak_shoulder = max(f.get("shoulders_angle", 0) for f in turn_frames)
         sh_score = self._score_in_range(peak_shoulder, "bh_shoulder_rotation")
-        combined = int(xf_score * 0.50 + sh_score * 0.50)
 
-        fb = []
-        tip = ""
-        if peak_xf < 12:
-            fb.append(f"Very limited shoulder-hip separation ({peak_xf:.0f}°). On the backhand, your lead shoulder needs to point toward the incoming ball.")
-            tip = "Turn your shoulders so your lead shoulder (the one closest to the net) points directly at the incoming ball. This loads your core for the forward swing."
-        elif peak_xf < 20:
-            fb.append(f"Moderate coil on the backhand ({peak_xf:.0f}°). A fuller turn will help generate more power from the core.")
-            tip = "Try to get your chest facing the side fence at the peak of your turn. The more you coil, the more effortless the power."
+        # Compactness check — racket should stay in front of the chest during turn.
+        # We check hand position relative to body center. On the backhand, both hands
+        # are on the racket, so the hands shouldn't drift far behind the body.
+        compactness_values = []
+        for f in turn_frames:
+            # For two-handed backhand, check both wrist positions
+            # We want hands to stay near or in front of body center
+            rh = f.get("r_hand_in_front", 0)
+            lh = f.get("l_hand_in_front", 0)
+            # Both hands should be roughly in front — average them
+            avg_hand = (rh + lh) / 2
+            compactness_values.append(avg_hand)
+
+        avg_compact = sum(compactness_values) / len(compactness_values) if compactness_values else 0
+        # Compact = hands near center or in front (>= -0.04). Big backswing = hands far behind.
+        compact_score = 92 if avg_compact >= -0.03 else 70 if avg_compact >= -0.06 else max(30, int(90 + avg_compact * 500))
+
+        # Timing — how quickly does the turn happen?
+        # Check if peak rotation is in the first half of all frames (early turn)
+        total_frames = len(frame_data)
+        turn_indices = phases.get("unit_turn", [])
+        if turn_indices and total_frames > 0:
+            turn_midpoint = sum(turn_indices) / len(turn_indices)
+            turn_timing_ratio = turn_midpoint / total_frames
+            # Earlier is better — Djokovic turns earlier than anyone
+            timing_score = 90 if turn_timing_ratio < 0.25 else 70 if turn_timing_ratio < 0.35 else 50
         else:
-            fb.append(f"Strong unit turn ({peak_xf:.0f}° separation). Good coil setting up an efficient swing.")
+            timing_score = 60
 
-        return {"score": combined, "label": "Unit Turn", "feedback": " ".join(fb),
-                "details": {"peak_xfactor": round(peak_xf, 1), "shoulder_rotation": round(peak_shoulder, 1)},
-                "tip": tip if tip else "Good backhand turn. Keep the coil compact and loaded."}
+        combined = int(xf_score * 0.30 + sh_score * 0.25 + compact_score * 0.25 + timing_score * 0.20)
 
-    def _score_racket_drop(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "racket_drop")
-        if not frames:
-            return {"score": 50, "label": "Racket Slot", "feedback": "Could not detect racket drop phase.", "details": {}, "tip": "Ensure the camera captures your full swing path."}
+        feedback_parts = []
+        tip = ""
 
-        max_drop = max(max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames)
+        if peak_xf < 12:
+            feedback_parts.append(f"Minimal shoulder-hip separation ({peak_xf:.0f}°). Your shoulders and hips are rotating together as a block — you're losing the coil that creates effortless power.")
+            tip = "Turn your shoulders roughly 90° while your hips rotate less. This separation between torso and pelvis is where elastic energy is stored. Djokovic creates this coil immediately upon recognizing the backhand — his preparation is what allows him to handle pace so effortlessly."
+        elif peak_xf < 20:
+            feedback_parts.append(f"Moderate shoulder-hip separation ({peak_xf:.0f}°). Good start, but more coil is available.")
+            tip = "Allow your shoulders to rotate further while keeping your hips quieter. The goal is early torso-pelvis separation — your shoulders should lead the turn, creating a coil your core can unwind through the shot."
+        else:
+            feedback_parts.append(f"Strong torso-pelvis separation ({peak_xf:.0f}°). You're creating the early coil that sets up an efficient swing.")
+
+        if compact_score < 65:
+            feedback_parts.append("The racket is drifting behind your body during the turn. On a Djokovic-style backhand, the racket stays in front of the chest during preparation.")
+            if not tip:
+                tip = "Keep the racket in front of your chest during the unit turn — don't let it drift behind your body. Both hands stay on the racket and guide the preparation. Djokovic's turn is compact and controlled — the body rotates around the racket, not the other way around."
+        elif compact_score >= 85:
+            feedback_parts.append("Compact preparation with the racket staying in front — this is exactly how Djokovic prepares.")
+
+        if timing_score < 60:
+            feedback_parts.append("The turn is happening late in the stroke sequence.")
+            if not tip:
+                tip = "Initiate the turn EARLIER — the moment you recognize the ball is coming to your backhand side. Djokovic turns earlier than almost anyone on tour. This early preparation is what allows him to take the ball on the rise against the fastest servers."
+
+        return {
+            "score": combined, "label": "Unit Turn",
+            "feedback": " ".join(feedback_parts) if feedback_parts else "Excellent early, compact unit turn. Racket stays in front, body coils efficiently.",
+            "details": {
+                "peak_xfactor": round(peak_xf, 1),
+                "shoulder_rotation": round(peak_shoulder, 1),
+                "compactness_score": compact_score,
+                "timing_score": timing_score,
+            },
+            "tip": tip if tip else "Your unit turn is strong — early, compact, and loaded. This is the foundation of a Djokovic-level backhand."
+        }
+
+    # ===== 2. RACKET DROP =====
+
+    def _score_racket_drop(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        From the compact backswing, the racket head drops below the ball
+        by 6-12 inches depending on height and spin intent.
+
+        The drop is driven by relaxed wrists and forearms, NOT by forcing
+        the racket down. The left hand (top hand) controls the racket angle;
+        the right hand stabilizes but stays loose.
+
+        Signature Djokovic trait: His racket drop is clean and symmetrical —
+        no wobble, no collapse of the wrists.
+        """
+        drop_frames = self._get_frames(frame_data, phases, "racket_drop")
+        if not drop_frames:
+            return {
+                "score": 50, "label": "Racket Drop",
+                "feedback": "Could not detect racket drop phase. Ensure the camera captures the full swing path.",
+                "details": {}, "tip": "Record from the side so the racket's vertical path is clearly visible."
+            }
+
+        # Max wrist drop below elbow
+        max_drop = max(
+            max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0))
+            for f in drop_frames
+        )
         drop_score = self._score_in_range(max_drop, "bh_wrist_drop")
 
-        fb = []
-        tip = ""
-        if max_drop < 0.01:
-            fb.append("Minimal racket drop detected. The racket is staying too high, limiting your ability to create topspin.")
-            tip = "Let the racket drop below the ball before the forward swing. On the backhand, the racket should slot below the contact point to create a natural low-to-high path."
-        elif max_drop < 0.03:
-            fb.append("Moderate racket drop. A bit more depth below the ball would increase topspin potential.")
-            tip = "Relax the wrists and let gravity pull the racket head down into the slot before you swing forward."
+        # Check for wrist stability/symmetry during the drop
+        # A clean drop has consistent wrist positions across frames (no wobble)
+        wrist_drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in drop_frames]
+        if len(wrist_drops) > 2:
+            # Check smoothness — the drop should be progressive, not jerky
+            diffs = [abs(wrist_drops[i] - wrist_drops[i-1]) for i in range(1, len(wrist_drops))]
+            avg_diff = sum(diffs) / len(diffs) if diffs else 0
+            # Small consistent changes = smooth. Large jumps = wobble.
+            smoothness_score = 90 if avg_diff < 0.01 else 70 if avg_diff < 0.02 else 45
         else:
-            fb.append("Good racket drop below the ball. This sets up a solid low-to-high swing path for topspin.")
+            smoothness_score = 60
 
-        return {"score": drop_score, "label": "Racket Slot", "feedback": " ".join(fb),
-                "details": {"max_wrist_drop": round(max_drop, 4)},
-                "tip": tip if tip else "Good racket slot. The drop below the ball is key to topspin on the backhand."}
+        # Elbow relaxation — both elbows should have moderate angles (not locked)
+        # indicating relaxed arms during the drop
+        elbow_angles = []
+        for f in drop_frames:
+            r_elb = f.get("r_elbow_angle", 160)
+            l_elb = f.get("l_elbow_angle", 160)
+            elbow_angles.append((r_elb, l_elb))
 
-    def _score_contact(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "forward_swing_contact")
-        if not frames:
-            return {"score": 50, "label": "Contact Point", "feedback": "Could not detect contact.", "details": {}, "tip": "Record from the side to capture the contact zone."}
+        avg_r_elbow = sum(e[0] for e in elbow_angles) / len(elbow_angles) if elbow_angles else 160
+        avg_l_elbow = sum(e[1] for e in elbow_angles) / len(elbow_angles) if elbow_angles else 160
 
-        cf = frames[-1]
-        elbow = min(cf.get("r_elbow_angle", 180), cf.get("l_elbow_angle", 180))
-        elbow_score = self._score_in_range(elbow, "bh_contact_elbow")
+        combined = int(drop_score * 0.55 + smoothness_score * 0.45)
+
+        feedback_parts = []
+        tip = ""
+
+        if max_drop < 0.015:
+            feedback_parts.append("Very little racket drop detected. The racket head is staying too high, which means you're swinging flat through the ball with no low-to-high component.")
+            tip = "Let the racket head drop below the ball before swinging forward. This happens through wrist and forearm relaxation — don't force the racket down. On Djokovic's backhand, the left hand (top hand) controls the angle while the right hand stays loose. The drop should be 6-12 inches below the ball."
+        elif max_drop < 0.03:
+            feedback_parts.append(f"Moderate racket drop. There's room to let the racket fall deeper to create a stronger low-to-high path.")
+            tip = "Relax your wrists and forearms to allow a deeper racket drop. The drop is what creates the low-to-high swing path needed for reliable topspin. Djokovic's racket drop is clean and symmetrical — no wobble, no wrist collapse."
+        else:
+            feedback_parts.append("Good racket drop below the ball. This sets up the low-to-high path needed for controlled topspin.")
+
+        if smoothness_score < 60:
+            feedback_parts.append("The racket path during the drop appears uneven — there may be wobble or inconsistency in the vertical plane.")
+            if not tip:
+                tip = "Focus on a smooth, clean racket drop. Djokovic's drop is symmetrical — the racket descends on a consistent vertical plane with no wobble. This comes from relaxed but controlled wrists. Think of the racket falling naturally under gravity, guided but not forced."
+
+        return {
+            "score": combined, "label": "Racket Drop",
+            "feedback": " ".join(feedback_parts) if feedback_parts else "Clean, symmetrical racket drop. Good depth below the ball with smooth wrist relaxation.",
+            "details": {
+                "max_wrist_drop": round(max_drop, 4),
+                "smoothness_score": smoothness_score,
+            },
+            "tip": tip if tip else "Excellent racket drop — clean, symmetrical, and controlled. This is the setup for reliable topspin on every backhand."
+        }
+
+    # ===== 3. CONTACT POINT =====
+
+    def _score_contact_point(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Djokovic makes contact slightly in front of the lead hip.
+        The left arm does most of the work and is almost fully extended.
+        The right arm is bent and supporting.
+        Racket face is neutral or slightly closed.
+        Head stays still through and after contact.
+
+        Signature trait: His contact point is one of the most consistent in tennis history.
+        """
+        contact_frames = self._get_frames(frame_data, phases, "forward_swing_contact")
+        if not contact_frames:
+            return {
+                "score": 50, "label": "Contact Point",
+                "feedback": "Could not detect the contact phase. Record from the side to capture arm extension at contact.",
+                "details": {}, "tip": "Position the camera at your 10 o'clock or 2 o'clock to clearly see the contact point."
+            }
+
+        # Use the last frame in the forward swing as closest to actual contact
+        cf = contact_frames[-1]
+
+        # LEFT arm extension (top hand — should be almost fully extended)
+        l_elbow = cf.get("l_elbow_angle", 150)
+        l_arm_score = self._score_in_range(l_elbow, "bh_left_arm_extension")
+
+        # RIGHT arm (bottom hand — should be bent, supporting)
+        r_elbow = cf.get("r_elbow_angle", 140)
+        r_arm_score = self._score_in_range(r_elbow, "bh_right_arm_bent")
+
+        # Contact out front
         out_front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
         front_score = self._score_in_range(out_front, "bh_contact_out_front")
-        combined = int(elbow_score * 0.45 + front_score * 0.55)
 
-        fb = []
-        tip = ""
-        if elbow < 130:
-            fb.append(f"Arm too bent at contact ({elbow:.0f}°). The ball is getting in on you — you're cramped.")
-            tip = "Step away from the ball and extend your arms through contact. On a two-handed backhand, both arms should be pushing through the ball. On a one-hander, the hitting arm needs full extension."
-        elif elbow > 175:
-            fb.append(f"Arm fully locked at contact ({elbow:.0f}°). A slight bend gives you better control and feel.")
+        # Head stability through contact zone
+        torso_leans = [f.get("torso_lean", 0) for f in contact_frames]
+        if len(torso_leans) > 1:
+            head_variance = sum((t - sum(torso_leans) / len(torso_leans)) ** 2 for t in torso_leans) / len(torso_leans)
+            head_score = 90 if head_variance < 0.001 else max(40, int(90 - head_variance * 5000))
         else:
-            fb.append(f"Good arm extension at contact ({elbow:.0f}°).")
+            head_score = 65
 
-        if out_front < 0.05:
-            fb.append("Contact point is too deep — the ball is getting behind you.")
+        combined = int(l_arm_score * 0.25 + r_arm_score * 0.15 + front_score * 0.35 + head_score * 0.25)
+
+        feedback_parts = []
+        tip = ""
+
+        # Left arm assessment
+        if l_elbow < 135:
+            feedback_parts.append(f"Your left arm (top hand) is too bent at contact ({l_elbow:.0f}°). You're cramped — the ball is getting in on you.")
+            tip = "Extend your left arm (top hand) more through contact. On Djokovic's backhand, the left arm does most of the work and is almost fully extended at contact. This gives you reach, leverage, and stability."
+        elif l_elbow < 155:
+            feedback_parts.append(f"Your left arm could extend more at contact ({l_elbow:.0f}°). More extension gives you better reach and leverage.")
+            tip = "Push through the ball with the left arm. At contact, the left arm should be nearly straight — it's the primary driver of the swing. The right arm stays bent and supports."
+        else:
+            feedback_parts.append(f"Left arm is well extended at contact ({l_elbow:.0f}°). The top hand is doing the work — this is textbook two-handed backhand structure.")
+
+        # Right arm assessment
+        if r_elbow > 150:
+            feedback_parts.append(f"Your right arm (support hand) is too straight ({r_elbow:.0f}°). It should stay bent, stabilizing while the left arm drives.")
+        elif r_elbow < 75:
+            feedback_parts.append(f"Your right arm is very bent ({r_elbow:.0f}°). Make sure you're not over-gripping with the bottom hand.")
+        else:
+            feedback_parts.append("Good arm structure — left arm extended, right arm bent and supporting.")
+
+        # Contact point position
+        if out_front < 0.04:
+            feedback_parts.append("Contact is too deep — the ball is getting behind you. This forces you to push rather than drive through the ball.")
             if not tip:
-                tip = "Make contact further out in front. On the backhand, the contact point should be slightly ahead of your front hip. If you're hitting late, prepare earlier and step into the ball."
-        elif out_front >= 0.08:
-            fb.append("Contact point is well out in front. This gives you offensive positioning.")
+                tip = "Make contact in front of your lead hip. If you're hitting late, the fix is earlier preparation — turn sooner. Djokovic's contact point is one of the most consistent in tennis history because he prepares earlier than anyone."
+        elif out_front < 0.08:
+            feedback_parts.append("Contact is slightly behind the ideal point. A bit more out front would give you better control.")
+            if not tip:
+                tip = "Take the ball a fraction earlier — contact should be in front of your lead hip, not beside it. This puts you in an offensive position and allows you to redirect pace down the line with almost no telegraphing."
+        else:
+            feedback_parts.append("Contact point well out in front. This gives you offensive control and the ability to redirect with precision.")
 
-        return {"score": combined, "label": "Contact Point", "feedback": " ".join(fb),
-                "details": {"elbow_angle": round(elbow, 1), "out_front": round(out_front, 4)},
-                "tip": tip if tip else "Solid contact point on the backhand. Keep meeting the ball out front."}
+        # Head stability
+        if head_score < 55:
+            feedback_parts.append("Your head is moving through the contact zone. This affects tracking and consistency.")
+            if not tip:
+                tip = "Keep your head still through and after contact. Don't pull your eyes to the target too early. Djokovic's head stability at contact is a key reason his backhand is so consistent under pressure."
 
-    def _score_follow_through(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "follow_through")
-        if not frames:
-            return {"score": 55, "label": "Follow Through", "feedback": "Could not detect follow through.", "details": {}, "tip": "Record the full finish of the stroke."}
+        return {
+            "score": combined, "label": "Contact Point",
+            "feedback": " ".join(feedback_parts),
+            "details": {
+                "left_arm_extension": round(l_elbow, 1),
+                "right_arm_angle": round(r_elbow, 1),
+                "contact_out_front": round(out_front, 4),
+                "head_stability_score": head_score,
+            },
+            "tip": tip if tip else "Outstanding contact point. Extended left arm, supportive right arm, out front, head still. This is Djokovic-level stability."
+        }
 
-        torso_leans = [abs(f.get("torso_lean", 0)) for f in frames]
+    # ===== 4. LOW-TO-HIGH SWING PATH =====
+
+    def _score_swing_path(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Djokovic uses a moderate low-to-high path — less vertical than Nadal,
+        more vertical than Federer's backhand.
+
+        The upward acceleration is driven by:
+        - Leg extension
+        - Torso rotation
+        - Left arm pull through the ball
+
+        Signature trait: He can change the trajectory (heavy crosscourt vs.
+        flat down-the-line) without changing his preparation.
+        """
+        # We analyze this across the drop and forward swing phases
+        drop_frames = self._get_frames(frame_data, phases, "racket_drop")
+        swing_frames = self._get_frames(frame_data, phases, "forward_swing_contact")
+        all_swing = drop_frames + swing_frames
+
+        if len(all_swing) < 4:
+            return {
+                "score": 55, "label": "Swing Path",
+                "feedback": "Not enough frames to assess the swing path. Record with good lighting and a clear side angle.",
+                "details": {},
+                "tip": "The camera should capture the full arc of the racket — from the drop below the ball through the forward swing."
+            }
+
+        # Track wrist height through the swing — it should go low then high
+        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in all_swing]
+
+        # Find the lowest point and the highest point after it
+        min_height = min(wrist_heights)
+        min_idx = wrist_heights.index(min_height)
+        post_min_heights = wrist_heights[min_idx:]
+        max_height_after = max(post_min_heights) if post_min_heights else min_height
+
+        # The range from low to high = the swing path magnitude
+        low_to_high_range = max_height_after - min_height
+
+        # Moderate low-to-high is ideal for Djokovic model (~0.05-0.15 range)
+        if 0.04 <= low_to_high_range <= 0.18:
+            path_score = 88
+        elif 0.02 <= low_to_high_range <= 0.22:
+            path_score = 68
+        elif low_to_high_range < 0.02:
+            path_score = 35  # Too flat
+        else:
+            path_score = 50  # Too vertical
+
+        # Leg extension during the swing (ground-up energy)
+        knee_angles = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in swing_frames] if swing_frames else []
+        if len(knee_angles) >= 2:
+            knee_extension = knee_angles[-1] - knee_angles[0]
+            leg_drive_score = 85 if knee_extension > 8 else 65 if knee_extension > 3 else 40
+        else:
+            knee_extension = 0
+            leg_drive_score = 55
+
+        # Torso rotation through the swing
+        shoulder_angles = [f.get("shoulders_angle", 0) for f in swing_frames] if swing_frames else []
+        if len(shoulder_angles) > 1:
+            rotation_through = max(shoulder_angles) - min(shoulder_angles)
+            rotation_score = 85 if rotation_through > 15 else 65 if rotation_through > 8 else 40
+        else:
+            rotation_through = 0
+            rotation_score = 55
+
+        combined = int(path_score * 0.40 + leg_drive_score * 0.30 + rotation_score * 0.30)
+
+        feedback_parts = []
+        tip = ""
+
+        if low_to_high_range < 0.02:
+            feedback_parts.append("Swing path is too flat. There's almost no low-to-high component, which means very little topspin.")
+            tip = "Create more upward acceleration through the ball. The swing should move from low to high, driven by leg extension and torso rotation, with the left arm pulling through the ball. Djokovic's path is moderate — less vertical than Nadal, more vertical than Federer — giving him both spin and pace options."
+        elif low_to_high_range > 0.22:
+            feedback_parts.append("The swing path is very steep — you're brushing up excessively. This creates heavy spin but costs you pace and depth.")
+            tip = "Flatten out the swing path slightly. Djokovic uses a moderate low-to-high angle — enough for reliable topspin, but not so steep that he loses penetration. This is what allows him to flatten out the backhand when attacking without changing his preparation."
+        else:
+            feedback_parts.append("Good moderate low-to-high swing path. This gives you both topspin consistency and the ability to flatten out when attacking.")
+
+        if leg_drive_score < 55:
+            feedback_parts.append("Limited leg drive during the swing. The upward acceleration should start from the ground.")
+            if not tip:
+                tip = "Bend your knees during the backswing and push up through the ball as you swing. The low-to-high path starts with your legs extending, then your torso rotating, then your left arm pulling through. Ground-up sequence."
+        elif leg_drive_score >= 75:
+            feedback_parts.append("Good leg drive contributing to the upward swing path.")
+
+        if rotation_score < 55:
+            feedback_parts.append("Limited torso rotation through the swing. More rotation adds power and consistency.")
+            if not tip:
+                tip = "Let your torso rotate through the ball. The power on the two-handed backhand comes from torso rotation combined with the left arm pull. Your chest should face the target at the finish."
+
+        return {
+            "score": combined, "label": "Swing Path",
+            "feedback": " ".join(feedback_parts),
+            "details": {
+                "low_to_high_range": round(low_to_high_range, 4),
+                "knee_extension": round(knee_extension, 1),
+                "torso_rotation_through": round(rotation_through, 1),
+            },
+            "tip": tip if tip else "Excellent swing path — moderate low-to-high with good leg drive and rotation. This gives you the versatility to hit heavy topspin or flatten out without changing your preparation."
+        }
+
+    # ===== 5. FOLLOW THROUGH =====
+
+    def _score_follow_through(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Djokovic finishes with a compact, across-the-body follow through.
+        Racket often ends near the right shoulder.
+        Elbows bend naturally after contact, allowing relaxed deceleration.
+        Torso finishes fully rotated toward the target.
+        Feet stay balanced — no falling off the shot.
+
+        Signature trait: His follow-through is minimalist — no wasted motion, no over-swinging.
+        """
+        ft_frames = self._get_frames(frame_data, phases, "follow_through")
+        if not ft_frames:
+            return {
+                "score": 55, "label": "Follow Through",
+                "feedback": "Could not detect follow through. Keep recording until the racket has fully finished.",
+                "details": {}, "tip": "Record the complete motion until the racket reaches the opposite shoulder."
+            }
+
+        # Cross-body finish — torso rotation completion
+        shoulder_angles = [f.get("shoulders_angle", 0) for f in ft_frames]
+        torso_leans = [abs(f.get("torso_lean", 0)) for f in ft_frames]
         max_lean = max(torso_leans) if torso_leans else 0
-        shoulder_angles = [f.get("shoulders_angle", 0) for f in frames]
         rotation_range = (max(shoulder_angles) - min(shoulder_angles)) if len(shoulder_angles) > 1 else 0
 
-        if max_lean > 0.06 and rotation_range > 8:
-            score = 85
-        elif max_lean > 0.03 or rotation_range > 4:
-            score = 65
+        if max_lean > 0.06 and rotation_range > 10:
+            finish_score = 88
+        elif max_lean > 0.03 or rotation_range > 5:
+            finish_score = 65
         else:
-            score = 42
+            finish_score = 40
 
-        fb = []
+        # Compactness of finish — elbows should bend naturally (relaxed deceleration)
+        # NOT fully straight (over-swinging) or extremely bent (abbreviated)
+        final_frame = ft_frames[-1] if ft_frames else ft_frames[0]
+        final_l_elbow = final_frame.get("l_elbow_angle", 150)
+        final_r_elbow = final_frame.get("r_elbow_angle", 150)
+        avg_final_elbow = (final_l_elbow + final_r_elbow) / 2
+
+        # Natural bent finish: 80-140° is compact and relaxed
+        if 80 <= avg_final_elbow <= 140:
+            compact_score = 88
+        elif 65 <= avg_final_elbow <= 155:
+            compact_score = 65
+        else:
+            compact_score = 40
+
+        # Balance — check if weight stays centered (not falling off the shot)
+        weight_shifts = [f.get("weight_shift_x", 0) for f in ft_frames]
+        if len(weight_shifts) > 1:
+            weight_variance = sum((w - sum(weight_shifts) / len(weight_shifts)) ** 2 for w in weight_shifts) / len(weight_shifts)
+            balance_score = 88 if weight_variance < 0.001 else 65 if weight_variance < 0.003 else 40
+        else:
+            balance_score = 60
+
+        combined = int(finish_score * 0.35 + compact_score * 0.35 + balance_score * 0.30)
+
+        feedback_parts = []
         tip = ""
-        if score < 55:
-            fb.append("Follow through is abbreviated. You're decelerating before fully finishing the swing.")
-            tip = "On the backhand, extend through the ball toward your target before letting the racket wrap around. For a two-hander, finish with both hands high. For a one-hander, extend the hitting arm fully toward the target, then let it wrap naturally."
-        elif score < 75:
-            fb.append("Moderate follow through. There's room for a fuller finish through the ball.")
-            tip = "Think about pushing the racket face toward your target for as long as possible before the natural wrap-around."
+
+        if finish_score < 55:
+            feedback_parts.append("Follow through is stopping short. The torso isn't fully rotating toward the target.")
+            tip = "Let the racket finish across your body — it should end near your right shoulder (for a right-hander). Your torso should rotate fully so your chest faces the target. But keep it compact — Djokovic's follow-through is minimalist. No wasted motion, no over-swinging."
+        elif finish_score < 75:
+            feedback_parts.append("Moderate follow through. The torso is rotating but could finish more completely.")
+            tip = "Allow your body to fully rotate through the shot. The racket should arrive near the opposite shoulder naturally — don't stop it short, but don't force it past either."
         else:
-            fb.append("Full follow through with good extension through the contact zone.")
+            feedback_parts.append("Full, compact follow through. Torso rotated toward target, racket finishes near the opposite shoulder.")
 
-        return {"score": score, "label": "Follow Through", "feedback": " ".join(fb),
-                "details": {"cross_body_lean": round(max_lean, 4), "rotation_range": round(rotation_range, 1)},
-                "tip": tip if tip else "Great follow through on the backhand."}
+        if compact_score < 55:
+            if avg_final_elbow > 155:
+                feedback_parts.append("Arms are too straight at the finish — this suggests over-swinging.")
+                if not tip:
+                    tip = "Let your elbows bend naturally after contact. The follow-through should be compact and relaxed. Djokovic's finish is minimalist — elbows bend naturally, allowing relaxed deceleration. No extra motion."
+            else:
+                feedback_parts.append("Arms are very bent at the finish — the follow-through may be too abbreviated.")
+                if not tip:
+                    tip = "Extend through the ball a bit more before allowing the natural wrap-around. You want to push through the contact zone before the elbows bend."
 
-    def _score_kinetic_chain(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "forward_swing_contact")
-        if len(frames) < 3:
-            return {"score": 55, "label": "Kinetic Chain", "feedback": "Not enough frames to assess the kinetic chain.", "details": {}, "tip": "Record with full body visible."}
+        if balance_score < 55:
+            feedback_parts.append("You appear to be falling off-balance during the follow through.")
+            if not tip:
+                tip = "Stay balanced through the finish. Your feet should stay grounded and stable — no falling off the shot. Djokovic's balance through the follow-through is elite. This is what allows him to recover instantly for the next ball."
+        elif balance_score >= 80:
+            feedback_parts.append("Excellent balance through the finish — feet stay grounded, ready for the next ball.")
 
-        hip_angles = [f.get("hips_angle", 0) for f in frames]
-        shoulder_angles = [f.get("shoulders_angle", 0) for f in frames]
+        return {
+            "score": combined, "label": "Follow Through",
+            "feedback": " ".join(feedback_parts),
+            "details": {
+                "torso_rotation": round(max_lean, 4),
+                "rotation_range": round(rotation_range, 1),
+                "finish_compactness": compact_score,
+                "balance_score": balance_score,
+                "avg_final_elbow": round(avg_final_elbow, 1),
+            },
+            "tip": tip if tip else "Compact, balanced follow through — exactly Djokovic's style. Minimalist finish with full energy transfer and instant recovery readiness."
+        }
 
-        def first_change(vals, thresh=2.0):
-            for i in range(1, len(vals)):
-                if abs(vals[i] - vals[i - 1]) > thresh:
-                    return i
-            return len(vals) - 1
+    # ===== 6. BALANCE & RECOVERY =====
 
-        hip_start = first_change(hip_angles)
-        sh_start = first_change(shoulder_angles)
+    def _score_balance(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Djokovic's backhand is defined by ELITE BALANCE through all phases.
+        Feet stay grounded, weight centered, athletic stance maintained.
+        This is what allows lightning-fast recovery for the next shot.
 
-        if hip_start < sh_start:
-            seq_score = 88
-            seq_fb = "Good hip-to-shoulder sequence on the backhand. Your hips lead the rotation."
-        elif hip_start == sh_start:
-            seq_score = 62
-            seq_fb = "Hips and shoulders rotating together. More separation would add power."
-        else:
-            seq_score = 38
-            seq_fb = "Shoulders leading before hips — you're using your arms instead of your core."
+        We measure:
+        - Knee bend through preparation and swing
+        - Stance width (athletic base)
+        - Weight distribution consistency
+        """
+        prep_frames = self._get_frames(frame_data, phases, "preparation")
+        if not prep_frames:
+            prep_frames = frame_data[:max(3, len(frame_data) // 6)]
 
-        knee_angles = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
-        knee_ext = knee_angles[-1] - knee_angles[0] if len(knee_angles) >= 2 else 0
-        knee_score = 85 if knee_ext > 8 else 60 if knee_ext > 3 else 38
+        if not prep_frames:
+            return {
+                "score": 50, "label": "Balance & Recovery",
+                "feedback": "Could not assess balance from available frames.",
+                "details": {}, "tip": "Start in an athletic position: knees bent, feet wider than shoulders, weight centered."
+            }
 
-        combined = int(seq_score * 0.55 + knee_score * 0.45)
-        tip = ""
-        if seq_score < 55:
-            tip = "Start the forward swing from the hips. Your lower body should rotate first, pulling the torso and then the arms through. On the backhand this is especially important for generating power without over-using the arm."
-        elif knee_score < 50:
-            tip = "Use your legs more. Bend your knees during the backswing and drive upward through the ball. Your legs are the engine."
-        else:
-            tip = "Good kinetic chain. Hip-led rotation with leg drive."
-
-        return {"score": combined, "label": "Kinetic Chain", "feedback": f"{seq_fb} {'Good leg drive.' if knee_score >= 70 else 'Limited leg drive detected.'}",
-                "details": {"sequence": "hips_first" if hip_start < sh_start else "simultaneous" if hip_start == sh_start else "shoulders_first", "knee_extension": round(knee_ext, 1)},
-                "tip": tip}
-
-    def _score_athletic_base(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "preparation")
-        if not frames:
-            frames = frame_data[:max(3, len(frame_data) // 6)]
-        if not frames:
-            return {"score": 50, "label": "Athletic Base", "feedback": "Could not assess stance.", "details": {}, "tip": "Start in an athletic position with knees bent."}
-
-        knees = [min(f.get("r_knee_angle", 180), f.get("l_knee_angle", 180)) for f in frames]
-        avg_knee = sum(knees) / len(knees)
+        # Knee bend
+        knees = [min(f.get("r_knee_angle", 180), f.get("l_knee_angle", 180)) for f in prep_frames]
+        avg_knee = sum(knees) / len(knees) if knees else 170
         knee_score = self._score_in_range(avg_knee, "bh_knee_bend")
 
-        stances = [f.get("stance_ratio", 1.0) for f in frames]
-        avg_stance = sum(stances) / len(stances)
+        # Stance width
+        stances = [f.get("stance_ratio", 1.0) for f in prep_frames]
+        avg_stance = sum(stances) / len(stances) if stances else 1.0
         stance_score = self._score_in_range(avg_stance, "bh_stance_width")
 
-        combined = int(knee_score * 0.55 + stance_score * 0.45)
+        # Overall weight stability through the ENTIRE stroke
+        all_shifts = [f.get("weight_shift_x", 0) for f in frame_data if f]
+        if len(all_shifts) > 3:
+            mean_shift = sum(all_shifts) / len(all_shifts)
+            weight_var = sum((s - mean_shift) ** 2 for s in all_shifts) / len(all_shifts)
+            stability_score = 88 if weight_var < 0.001 else 65 if weight_var < 0.003 else 40
+        else:
+            stability_score = 60
 
-        fb = f"Knee angle: {avg_knee:.0f}°. " + ("Good knee bend." if avg_knee < 155 else "Stand lower — more bend gives you more power and stability.")
-        tip = "Get low on the backhand. Bend your knees and feel your weight loaded on the balls of your feet." if combined < 70 else "Good athletic base."
+        combined = int(knee_score * 0.35 + stance_score * 0.30 + stability_score * 0.35)
 
-        return {"score": combined, "label": "Athletic Base", "feedback": fb,
-                "details": {"avg_knee_angle": round(avg_knee, 1), "avg_stance_ratio": round(avg_stance, 2)},
-                "tip": tip}
+        feedback_parts = []
+        tip = ""
+
+        if avg_knee > 165:
+            feedback_parts.append(f"Standing too upright ({avg_knee:.0f}°). You need a lower athletic base for the backhand.")
+            tip = "Get lower. Bend your knees and sit into the stance. Djokovic's backhand is built on elite balance — and balance starts with a low center of gravity. Bent knees give you the spring to drive upward through the ball and the stability to recover instantly."
+        elif avg_knee > 155:
+            feedback_parts.append(f"Moderate knee bend ({avg_knee:.0f}°). A bit lower would improve your stability and power.")
+            tip = "Drop your hips a couple more inches. The lower your base, the more stable and explosive you become."
+        else:
+            feedback_parts.append(f"Good knee bend ({avg_knee:.0f}°). Athletic, loaded stance.")
+
+        if avg_stance < 1.0:
+            feedback_parts.append("Feet too narrow. Widen your base for better balance.")
+            if not tip:
+                tip = "Your feet should be at least shoulder-width apart. A narrow stance makes you vulnerable to being pushed around by pace."
+        elif avg_stance > 2.2:
+            feedback_parts.append("Very wide stance. This can limit your recovery speed.")
+        else:
+            feedback_parts.append("Good stance width.")
+
+        if stability_score < 55:
+            feedback_parts.append("Your weight is shifting significantly through the stroke — you may be falling off-balance during the swing.")
+            if not tip:
+                tip = "Stay centered over your base through the entire stroke. Djokovic never falls off his backhand — his balance is what allows him to recover faster than almost anyone on tour. If you're falling off the shot, you'll be late to the next one."
+        elif stability_score >= 80:
+            feedback_parts.append("Excellent weight stability through the stroke — elite balance.")
+
+        return {
+            "score": combined, "label": "Balance & Recovery",
+            "feedback": " ".join(feedback_parts),
+            "details": {
+                "avg_knee_angle": round(avg_knee, 1),
+                "avg_stance_ratio": round(avg_stance, 2),
+                "stability_score": stability_score,
+            },
+            "tip": tip if tip else "Elite balance — low stance, stable weight, grounded through the stroke. This is the foundation of a reliable backhand under pressure."
+        }
 
 
 # ==================== VOLLEY ANALYZER ====================
 
 class VolleyAnalyzer:
     """
-    Biomechanical analysis of the tennis volley.
-    Model: compact, efficient motion. No big swings.
+    Biomechanical analysis of the tennis volley based on
+    the Pete Sampras model.
 
-    Components:
-    1. Ready Position — racket up, weight forward, knees bent
-    2. Shoulder Turn & Step — compact turn, step to ball (not swing)
-    3. Contact — firm wrist, punch through, racket face open
-    4. Recovery — back to ready position quickly
+    Sampras' volley was defined by:
+    - Small, compact unit turn — he never "swings" on volleys: he turns, sets, and punches
+    - Racket level to the ball — racket face quiet, almost no wobble or flicking
+    - Contact well out front — crisp, penetrating feel from early contact
+    - Short, linear punch — a block with intention, not a swing
+    - Feet first, racket second — split step, forward step, weight into the court
+
+    Components analyzed:
+    1. Unit Turn — compact shoulder rotation, racket stays in front, head still
+    2. Racket Level — racket brought to ball height, face set early, no wrist drop on high volleys
+    3. Contact Point — well out front, firm arm, shoulder-guided punch
+    4. Swing Path — short, linear, compact punch (penalizes backswing and wrap-around)
+    5. Foot Positioning — split step timing, forward step, weight transfer into court
     """
 
     def analyze(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """Run full Sampras volley analysis."""
         results = {}
-        results["ready_position"] = self._score_ready(frame_data, phases)
-        results["shoulder_turn_step"] = self._score_turn_step(frame_data, phases)
-        results["contact_point"] = self._score_contact(frame_data, phases)
-        results["recovery"] = self._score_recovery(frame_data, phases)
 
-        weights = {"ready_position": 0.25, "shoulder_turn_step": 0.25, "contact_point": 0.30, "recovery": 0.20}
+        results["unit_turn"] = self._score_unit_turn(frame_data, phases)
+        results["racket_level"] = self._score_racket_level(frame_data, phases)
+        results["contact_point"] = self._score_contact_point(frame_data, phases)
+        results["swing_path"] = self._score_swing_path(frame_data, phases)
+        results["foot_positioning"] = self._score_foot_positioning(frame_data, phases)
+
+        weights = {
+            "unit_turn": 0.20,
+            "racket_level": 0.18,
+            "contact_point": 0.25,
+            "swing_path": 0.17,
+            "foot_positioning": 0.20,
+        }
         overall = sum(results[k]["score"] * weights[k] for k in weights)
         results["overall_score"] = round(overall)
         return results
@@ -1595,159 +2024,505 @@ class VolleyAnalyzer:
     def _get_frames(self, frame_data, phases, name):
         return [frame_data[i] for i in phases.get(name, []) if i < len(frame_data)]
 
-    def _score_ready(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "ready_position")
-        if not frames:
-            frames = frame_data[:max(2, len(frame_data) // 4)]
-        if not frames:
-            return {"score": 50, "label": "Ready Position", "feedback": "Could not assess ready position.", "details": {}, "tip": "Start with racket up, knees bent, weight forward."}
+    # ===== 1. UNIT TURN =====
 
-        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
-        avg_knee = sum(knees) / len(knees)
+    def _score_unit_turn(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        The moment the ball is struck by the opponent, Sampras initiates a small,
+        compact unit turn — shoulders rotate slightly, racket stays in front.
 
-        # Racket should be up — wrist near or above shoulder height
-        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in frames]
-        avg_wrist_h = sum(wrist_heights) / len(wrist_heights)
+        Unlike groundstrokes, the turn is MINIMAL: just enough to align the body
+        and set the racket angle. The non-dominant hand stays on the throat of
+        the racket to stabilize the face and guide preparation.
 
-        knee_score = 85 if avg_knee < 155 else 60 if avg_knee < 165 else 35
-        # Wrist at or above shoulder level = racket is up
-        racket_up_score = 85 if avg_wrist_h > 0.01 else 60 if avg_wrist_h > -0.02 else 35
+        Head stays still, eyes level, posture upright.
 
-        combined = int(knee_score * 0.50 + racket_up_score * 0.50)
+        Sampras signature: He never "swings" on volleys — he turns, sets, and punches.
+        """
+        turn_frames = self._get_frames(frame_data, phases, "shoulder_turn_step")
+        if not turn_frames:
+            turn_frames = frame_data[:max(2, len(frame_data) // 3)]
 
-        fb = []
-        tip = ""
-        if knee_score < 55:
-            fb.append("Standing too upright at the net. Get lower with more knee bend.")
-            tip = "At the net, stay low with your knees bent and weight on the balls of your feet. You need to be ready to react quickly in any direction."
-        if racket_up_score < 55:
-            fb.append("Racket is too low in the ready position. Keep it up in front of you.")
-            if not tip:
-                tip = "Hold the racket up at chest level with the head above your wrist. At the net, there's no time to lift a low racket — it needs to already be in position."
-        if not fb:
-            fb.append("Good ready position — racket up, knees bent, ready to react.")
+        if not turn_frames:
+            return {
+                "score": 50, "label": "Unit Turn",
+                "feedback": "Could not detect the unit turn phase.",
+                "details": {}, "tip": "Record from the front or slight angle to capture the compact shoulder turn."
+            }
 
-        return {"score": combined, "label": "Ready Position", "feedback": " ".join(fb),
-                "details": {"avg_knee_angle": round(avg_knee, 1), "avg_wrist_height": round(avg_wrist_h, 4)},
-                "tip": tip if tip else "Solid ready position. Stay compact and alert at the net."}
-
-    def _score_turn_step(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "shoulder_turn_step")
-        if not frames:
-            return {"score": 55, "label": "Turn & Step", "feedback": "Could not detect the turn and step.", "details": {}, "tip": "Turn your shoulders, then step to the ball. Don't swing."}
-
-        # Shoulder rotation should be COMPACT — not a huge turn
-        shoulder_angles = [f.get("shoulders_angle", 0) for f in frames]
+        # Shoulder rotation — should be SMALL (15-40°). Too much = swinging.
+        shoulder_angles = [f.get("shoulders_angle", 0) for f in turn_frames]
         max_rotation = max(shoulder_angles) if shoulder_angles else 0
 
-        # For a volley, rotation should be moderate (15-40°), not huge like a groundstroke
         if 15 <= max_rotation <= 40:
-            rotation_score = 90
-        elif 10 <= max_rotation <= 55:
-            rotation_score = 65
-        elif max_rotation > 55:
-            rotation_score = 35  # Too much backswing
+            rotation_score = 92
+        elif 10 <= max_rotation <= 50:
+            rotation_score = 70
+        elif max_rotation > 50:
+            rotation_score = 30  # Over-rotation — death at net
         else:
-            rotation_score = 45  # Too little preparation
+            rotation_score = 45  # Too little
 
-        # Check for excessive wrist drop (backswing too big)
-        drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in frames]
+        # Racket stays in front — check that wrist doesn't drift behind the body
+        compactness_values = []
+        for f in turn_frames:
+            rh = f.get("r_hand_in_front", 0)
+            lh = f.get("l_hand_in_front", 0)
+            compactness_values.append(max(rh, lh))
+
+        avg_compact = sum(compactness_values) / len(compactness_values) if compactness_values else 0
+        # Racket in front = positive or near zero. Behind body = negative.
+        compact_score = 92 if avg_compact >= -0.02 else 70 if avg_compact >= -0.05 else max(30, int(90 + avg_compact * 600))
+
+        # Racket drop check — NO backswing on a volley
+        drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in turn_frames]
         max_drop = max(drops) if drops else 0
-        if max_drop < 0.03:
-            compact_score = 90
-        elif max_drop < 0.06:
-            compact_score = 65
+        no_backswing_score = 92 if max_drop < 0.02 else 65 if max_drop < 0.04 else 30
+
+        # Head stability — posture should be upright, head still
+        torso_leans = [f.get("torso_lean", 0) for f in turn_frames]
+        if len(torso_leans) > 1:
+            head_var = sum((t - sum(torso_leans) / len(torso_leans)) ** 2 for t in torso_leans) / len(torso_leans)
+            head_score = 88 if head_var < 0.0005 else 65 if head_var < 0.002 else 40
         else:
-            compact_score = 35
+            head_score = 65
 
-        combined = int(rotation_score * 0.50 + compact_score * 0.50)
+        combined = int(rotation_score * 0.30 + compact_score * 0.25 + no_backswing_score * 0.25 + head_score * 0.20)
 
-        fb = []
+        feedback_parts = []
         tip = ""
-        if max_rotation > 55:
-            fb.append(f"Too much shoulder rotation ({max_rotation:.0f}°). On a volley, this means you're swinging instead of punching.")
-            tip = "The volley is a compact punch, not a swing. Turn your shoulders just enough to set the racket face, then step forward and punch through the ball. Think 'catch and redirect' — not 'wind up and hit.'"
+
+        if max_rotation > 50:
+            feedback_parts.append(f"Too much shoulder rotation ({max_rotation:.0f}°). This is a volley, not a groundstroke — over-rotation is death at the net.")
+            tip = "The volley turn is SMALL — just enough to align your body and set the racket angle. Sampras never swings on volleys. He turns, sets, and punches. Think of it as presenting the racket face to the ball, not winding up."
         elif max_rotation < 10:
-            fb.append("Very little shoulder turn. Even on a volley, a small compact turn helps set the racket angle.")
-            tip = "Turn your shoulders just slightly to set the racket face to the ball. It's a small move — think of it as presenting the racket, not swinging it."
+            feedback_parts.append("Almost no shoulder turn detected. Even on a volley, a small compact turn helps align the body and set the racket angle.")
+            tip = "Initiate a small shoulder turn the moment you recognize the ball — just enough to set the racket face and align your body to the target. The non-dominant hand should stay on the throat of the racket, guiding the preparation."
         else:
-            fb.append("Good compact shoulder turn — just enough preparation without over-swinging.")
+            feedback_parts.append(f"Good compact unit turn ({max_rotation:.0f}°). Just enough rotation to set the racket face without over-swinging.")
 
-        if compact_score < 55:
-            fb.append("The racket is dropping too much — your backswing is too big for a volley.")
+        if no_backswing_score < 55:
+            feedback_parts.append("The racket is dropping during preparation — this means you have a backswing. Volleys require NO backswing.")
             if not tip:
-                tip = "Keep the racket head above your wrist at all times during the volley. No backswing. The power comes from the step forward, not the swing."
+                tip = "Keep the racket head above your wrist at all times. There should be zero backswing on a volley. The racket stays in front of your body throughout the preparation. Sampras' racket face is quiet — almost no wobble or flicking."
 
-        return {"score": combined, "label": "Turn & Step", "feedback": " ".join(fb),
-                "details": {"shoulder_rotation": round(max_rotation, 1), "max_racket_drop": round(max_drop, 4)},
-                "tip": tip if tip else "Compact turn and step. This is exactly what a volley should look like."}
+        if compact_score < 60:
+            feedback_parts.append("The racket is drifting behind your body. On a volley, the racket must stay in front.")
+            if not tip:
+                tip = "Keep both hands on the racket during preparation and keep it in front of your chest. The non-dominant hand on the throat of the racket stabilizes the face and prevents it from drifting back."
 
-    def _score_contact(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "contact")
-        if not frames:
-            return {"score": 55, "label": "Contact", "feedback": "Could not detect contact point.", "details": {}, "tip": "Make contact out in front with a firm wrist."}
+        if head_score < 55:
+            feedback_parts.append("Your head and posture are moving during preparation. Stay upright with eyes level.")
+            if not tip:
+                tip = "Keep your head still, eyes level, posture upright through the volley. Your body should be stable — all the movement happens from the shoulder forward."
 
-        cf = frames[0]
-        out_front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        return {
+            "score": combined, "label": "Unit Turn",
+            "feedback": " ".join(feedback_parts) if feedback_parts else "Compact, clean unit turn. Racket stays in front, minimal rotation, head still. Textbook volley preparation.",
+            "details": {
+                "shoulder_rotation": round(max_rotation, 1),
+                "compactness_score": compact_score,
+                "backswing_check": no_backswing_score,
+                "head_stability": head_score,
+            },
+            "tip": tip if tip else "Excellent volley preparation — small turn, racket in front, head still. Sampras never swings on volleys. He turns, sets, and punches."
+        }
 
-        # For a volley, contact should be well in front
-        if out_front > 0.10:
-            front_score = 90
-        elif out_front > 0.06:
-            front_score = 65
+    # ===== 2. RACKET LEVEL TO THE BALL =====
+
+    def _score_racket_level(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Sampras brings the racket to the height of the incoming ball BEFORE contact.
+        High volleys: racket stays above the wrist, face slightly closed.
+        Low volleys: he lowers the racket with his LEGS, not by dropping the wrist.
+        The racket face is set early — no last-second adjustments.
+
+        Signature: His racket face is quiet — almost no wobble or flicking.
+        """
+        turn_frames = self._get_frames(frame_data, phases, "shoulder_turn_step")
+        contact_frames = self._get_frames(frame_data, phases, "contact")
+        all_prep = turn_frames + contact_frames
+
+        if not all_prep:
+            all_prep = frame_data[:max(3, len(frame_data) // 2)]
+
+        if not all_prep:
+            return {
+                "score": 50, "label": "Racket Level",
+                "feedback": "Could not assess racket level to the ball.",
+                "details": {}, "tip": "Bring the racket to the height of the ball. On low volleys, get down with your LEGS, not your wrist."
+            }
+
+        # Check wrist stability — the wrist height shouldn't fluctuate wildly
+        # (indicates "chasing" the ball with the wrist instead of setting the face early)
+        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in all_prep]
+        if len(wrist_heights) > 2:
+            wrist_diffs = [abs(wrist_heights[i] - wrist_heights[i-1]) for i in range(1, len(wrist_heights))]
+            avg_wrist_change = sum(wrist_diffs) / len(wrist_diffs)
+            # Small changes = racket face set early. Big changes = last-second adjustments.
+            face_stability = 90 if avg_wrist_change < 0.008 else 68 if avg_wrist_change < 0.015 else 40
         else:
-            front_score = 35
+            face_stability = 60
 
-        # Wrist firmness — elbow angle should be fairly stable (not whipping)
-        elbow = min(cf.get("r_elbow_angle", 180), cf.get("l_elbow_angle", 180))
-        if 120 <= elbow <= 160:
-            firm_score = 85
-        elif 110 <= elbow <= 170:
-            firm_score = 60
+        # On low volleys, knees should bend (not wrist drop)
+        # We check: if the wrist is below shoulder level AND knees are bent = good
+        # If wrist is low AND knees are straight = wrist-dropper (bad)
+        knee_angles = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in all_prep]
+        avg_knee = sum(knee_angles) / len(knee_angles) if knee_angles else 170
+        wrist_drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in all_prep]
+        avg_drop = sum(wrist_drops) / len(wrist_drops) if wrist_drops else 0
+
+        # Good technique: knees bend to get low (avg_knee < 150), minimal wrist drop
+        # Bad: straight legs (avg_knee > 160) with wrist dropping (avg_drop > 0.04)
+        if avg_knee < 150 and avg_drop < 0.04:
+            level_technique_score = 90  # Legs down, wrist stable
+        elif avg_knee < 155:
+            level_technique_score = 75  # Some knee bend
+        elif avg_drop > 0.05:
+            level_technique_score = 35  # Dropping wrist without bending knees
         else:
-            firm_score = 40
+            level_technique_score = 55
 
-        combined = int(front_score * 0.55 + firm_score * 0.45)
+        combined = int(face_stability * 0.55 + level_technique_score * 0.45)
 
-        fb = []
+        feedback_parts = []
         tip = ""
-        if front_score < 55:
-            fb.append("Contact point is too close to your body. The ball is jamming you.")
-            tip = "Reach out and make contact in front of your lead foot. On a volley, the further in front you contact the ball, the more control and angle you have. Step TO the ball."
+
+        if face_stability < 55:
+            feedback_parts.append("The racket face is making last-second adjustments to find the ball. The face should be set early and remain quiet through contact.")
+            tip = "Set the racket face EARLY — as soon as you recognize the ball. Bring the racket to the height of the incoming ball before contact, not during it. Sampras' racket face is set early with no last-second adjustments. His face is quiet — almost no wobble or flicking."
+        elif face_stability >= 80:
+            feedback_parts.append("Racket face is stable and set early. Quiet hands through the approach.")
+
+        if level_technique_score < 50:
+            feedback_parts.append("You're dropping your wrist to reach low balls instead of bending your knees. This collapses the racket face and causes errors.")
+            if not tip:
+                tip = "On low volleys, get DOWN with your LEGS — bend your knees deeply to lower your whole body, not just your wrist. The racket head should stay above the wrist at all times. Sampras lowers the racket with his legs, not by dropping the wrist. This keeps the racket face stable and predictable."
+        elif avg_knee > 160 and avg_drop < 0.03:
+            feedback_parts.append("Legs are quite straight. More knee bend would help you handle low volleys without compromising the racket face.")
+            if not tip:
+                tip = "Bend your knees more at the net. Whether the ball is high or low, an athletic knee bend gives you stability and the ability to adjust. Low volleys demand deep knee bend."
         else:
-            fb.append("Contact well out in front — this gives you control and offensive angle options.")
+            feedback_parts.append("Good technique — using your legs to adjust height, keeping the racket face stable.")
+
+        return {
+            "score": combined, "label": "Racket Level",
+            "feedback": " ".join(feedback_parts) if feedback_parts else "Racket set to ball height with stable face. Legs doing the work on low balls. Clean technique.",
+            "details": {
+                "face_stability_score": face_stability,
+                "avg_knee_angle": round(avg_knee, 1),
+                "avg_wrist_drop": round(avg_drop, 4),
+                "level_technique_score": level_technique_score,
+            },
+            "tip": tip if tip else "Excellent racket level technique. Face set early, quiet hands, legs adjusting height. This is how Sampras kept his volley so clean."
+        }
+
+    # ===== 3. CONTACT POINT =====
+
+    def _score_contact_point(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Sampras makes contact well in front of the body, often farther forward
+        than most modern players. The hitting arm is firm but not locked;
+        the wrist is stable. He uses the SHOULDER to guide the punch,
+        not the wrist or elbow.
+
+        Forward contact gives stability, control, and the ability to redirect
+        pace effortlessly. It also allows him to cut off angles and take time
+        away from opponents.
+
+        Signature: He meets the ball early and in front, giving his volleys
+        that crisp, penetrating feel.
+        """
+        contact_frames = self._get_frames(frame_data, phases, "contact")
+        if not contact_frames:
+            # Find the frame with maximum forward wrist reach
+            forwards = [max(f.get("r_wrist_forward", 0), f.get("l_wrist_forward", 0)) for f in frame_data]
+            if forwards:
+                peak_idx = forwards.index(max(forwards))
+                contact_frames = [frame_data[peak_idx]]
+
+        if not contact_frames:
+            return {
+                "score": 50, "label": "Contact Point",
+                "feedback": "Could not detect the contact point.",
+                "details": {}, "tip": "Make contact well out in front — the further forward, the more control."
+            }
+
+        cf = contact_frames[0]
+
+        # Contact out front — Sampras contacts further forward than most
+        out_front = max(cf.get("r_wrist_forward", 0), cf.get("l_wrist_forward", 0))
+        if out_front > 0.12:
+            front_score = 95  # Elite forward contact
+        elif out_front > 0.08:
+            front_score = 82
+        elif out_front > 0.05:
+            front_score = 60
+        else:
+            front_score = 30
+
+        # Arm firmness — not locked (180°) and not floppy (< 110°)
+        # Ideal: 120-160° — firm but not rigid
+        elbow = min(cf.get("r_elbow_angle", 160), cf.get("l_elbow_angle", 160))
+        if 120 <= elbow <= 160:
+            firm_score = 90
+        elif 110 <= elbow <= 170:
+            firm_score = 68
+        else:
+            firm_score = 38
+
+        # Shoulder-guided motion — check that the shoulder angle is active
+        # (the punch comes from the shoulder, not wrist or elbow manipulation)
+        shoulder_angle = min(cf.get("r_shoulder_angle", 90), cf.get("l_shoulder_angle", 90))
+        if 40 <= shoulder_angle <= 100:
+            shoulder_score = 85
+        else:
+            shoulder_score = 55
+
+        combined = int(front_score * 0.45 + firm_score * 0.30 + shoulder_score * 0.25)
+
+        feedback_parts = []
+        tip = ""
+
+        if front_score < 50:
+            feedback_parts.append("Contact point is too close to your body. The ball is jamming you, costing you stability and control.")
+            tip = "Make contact well in front of your body — further forward than you think. Sampras contacts the ball farther out front than most modern players. This forward contact gives his volleys that crisp, penetrating feel. It provides stability, control, and the ability to redirect pace effortlessly. Step TO the ball and meet it early."
+        elif front_score < 75:
+            feedback_parts.append("Contact is moderately out front. Reaching a bit further forward would give you more control and angle options.")
+            tip = "Push the contact point further out front. The further in front you meet the ball, the more you can cut off angles and take time away from your opponent."
+        else:
+            feedback_parts.append("Contact well out in front. This gives you stability, control, and the ability to redirect pace — exactly the Sampras feel.")
 
         if firm_score < 55:
-            fb.append("Your wrist appears to be breaking down at contact. A volley needs a firm, stable wrist.")
+            if elbow > 170:
+                feedback_parts.append("Your arm is locked straight at contact. Keep it firm but not rigid.")
+                if not tip:
+                    tip = "The hitting arm should be firm but not locked. A completely straight arm is rigid and can't absorb pace. Keep a slight bend — firm enough to be stable, relaxed enough to control."
+            elif elbow < 110:
+                feedback_parts.append("Your arm is too bent at contact — you're absorbing the ball instead of punching through it.")
+                if not tip:
+                    tip = "Extend your arm more through the volley. The arm should be firm and in front. Use the shoulder to guide the punch, not the wrist or elbow."
+        else:
+            feedback_parts.append("Arm is firm and stable at contact — good structure for the punch.")
+
+        return {
+            "score": combined, "label": "Contact Point",
+            "feedback": " ".join(feedback_parts),
+            "details": {
+                "contact_out_front": round(out_front, 4),
+                "elbow_angle": round(elbow, 1),
+                "shoulder_angle": round(shoulder_angle, 1),
+                "arm_firmness_score": firm_score,
+            },
+            "tip": tip if tip else "Outstanding contact — well out in front, firm arm, shoulder-guided punch. This is what gives a volley that crisp, clean feel."
+        }
+
+    # ===== 4. SWING PATH =====
+
+    def _score_swing_path(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Sampras' swing path is short, linear, and compact — a true "punch" volley.
+        High volleys: slight downward punch (forward and slightly down)
+        Low volleys: slight upward lift (forward and slightly up)
+        NO big backswing, no wrap-around, no windshield-wiper.
+
+        A short path reduces timing errors. Linear movement keeps the
+        racket face stable. It allows him to absorb or redirect pace with precision.
+
+        Signature: His volley is a block with intention, not a swing.
+        """
+        # Combine all phases to track the full motion
+        turn_frames = self._get_frames(frame_data, phases, "shoulder_turn_step")
+        contact_frames = self._get_frames(frame_data, phases, "contact")
+        recovery_frames = self._get_frames(frame_data, phases, "recovery")
+        all_frames = turn_frames + contact_frames + recovery_frames[:3]
+
+        if len(all_frames) < 3:
+            return {
+                "score": 55, "label": "Swing Path",
+                "feedback": "Not enough frames to assess the swing path.",
+                "details": {}, "tip": "The volley should be a short, compact punch — no backswing, no follow-through wrap."
+            }
+
+        # Check for excessive backswing (wrist drop before contact)
+        wrist_drops = [max(f.get("r_wrist_drop", 0), f.get("l_wrist_drop", 0)) for f in all_frames]
+        max_drop = max(wrist_drops) if wrist_drops else 0
+
+        if max_drop < 0.02:
+            backswing_score = 95  # No backswing — perfect
+        elif max_drop < 0.04:
+            backswing_score = 72
+        elif max_drop < 0.06:
+            backswing_score = 50
+        else:
+            backswing_score = 25  # Big backswing — swinging, not punching
+
+        # Check for excessive follow-through (wrap-around after contact)
+        # On a volley, the motion should STOP shortly after contact
+        if recovery_frames:
+            # Check if the torso keeps rotating after contact (over-swinging)
+            contact_shoulder = contact_frames[-1].get("shoulders_angle", 0) if contact_frames else 0
+            recovery_shoulders = [f.get("shoulders_angle", 0) for f in recovery_frames[:3]]
+            if recovery_shoulders:
+                post_contact_rotation = max(abs(s - contact_shoulder) for s in recovery_shoulders)
+            else:
+                post_contact_rotation = 0
+
+            if post_contact_rotation < 8:
+                follow_compact_score = 90  # Minimal post-contact rotation — compact
+            elif post_contact_rotation < 15:
+                follow_compact_score = 65
+            else:
+                follow_compact_score = 35  # Over-swinging through the volley
+        else:
+            follow_compact_score = 60
+
+        # Overall path linearity — shoulder rotation range through the whole motion
+        # should be small (punch = linear, not rotational)
+        all_rotations = [f.get("shoulders_angle", 0) for f in all_frames]
+        if len(all_rotations) > 1:
+            total_rotation_range = max(all_rotations) - min(all_rotations)
+            if total_rotation_range < 25:
+                linear_score = 90
+            elif total_rotation_range < 45:
+                linear_score = 65
+            else:
+                linear_score = 35
+        else:
+            linear_score = 60
+
+        combined = int(backswing_score * 0.35 + follow_compact_score * 0.30 + linear_score * 0.35)
+
+        feedback_parts = []
+        tip = ""
+
+        if backswing_score < 55:
+            feedback_parts.append("Too much backswing before contact. On a volley, the racket should never go back — only forward.")
+            tip = "Eliminate the backswing. The volley is a short, linear punch — the racket goes forward from wherever it is. Sampras' swing path is compact: no big backswing, no wrap-around, no windshield-wiper. His volley is a block with intention, not a swing. A short path reduces timing errors and keeps the racket face stable."
+        elif backswing_score >= 85:
+            feedback_parts.append("No backswing detected. Clean, compact preparation.")
+
+        if follow_compact_score < 55:
+            feedback_parts.append("Too much follow-through after contact. You're swinging THROUGH the ball instead of punching it.")
             if not tip:
-                tip = "Lock your wrist at contact. The volley is all about a firm wrist and stable racket face. Think of your hand, wrist, and racket as one solid unit."
+                tip = "Stop the racket shortly after contact. The volley punch is short and firm — the racket doesn't need to travel far after meeting the ball. Think 'catch and redirect' rather than 'swing and follow.' High volleys: slight downward punch. Low volleys: slight upward lift. That's it."
+        elif follow_compact_score >= 80:
+            feedback_parts.append("Compact finish after contact. The motion stops cleanly.")
 
-        return {"score": combined, "label": "Contact", "feedback": " ".join(fb),
-                "details": {"out_front": round(out_front, 4), "elbow_angle": round(elbow, 1)},
-                "tip": tip if tip else "Clean contact — out front with a firm wrist. That's a good volley."}
+        if linear_score < 55:
+            feedback_parts.append("The swing path has too much rotation — this looks more like a groundstroke than a volley.")
+            if not tip:
+                tip = "Keep the motion linear — forward to the target. The volley is a straight-line punch, not a rotational swing. Linear movement keeps the racket face stable and allows you to absorb or redirect pace with precision."
 
-    def _score_recovery(self, frame_data, phases):
-        frames = self._get_frames(frame_data, phases, "recovery")
-        if not frames:
-            return {"score": 60, "label": "Recovery", "feedback": "Could not assess recovery.", "details": {}, "tip": "After the volley, get back to ready position immediately."}
+        return {
+            "score": combined, "label": "Swing Path",
+            "feedback": " ".join(feedback_parts) if feedback_parts else "Short, linear punch. No backswing, compact finish. This is a block with intention — exactly right.",
+            "details": {
+                "backswing_score": backswing_score,
+                "follow_compact_score": follow_compact_score,
+                "total_rotation_range": round(total_rotation_range if 'total_rotation_range' in dir() else 0, 1),
+                "linear_score": linear_score,
+            },
+            "tip": tip if tip else "Perfect punch volley path — short, linear, and intentional. Sampras' volley was a block with direction. That's exactly what this looks like."
+        }
 
-        # Check if the player returns to an athletic stance
-        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in frames]
-        final_knee = knees[-1] if knees else 170
-        wrist_heights = [max(f.get("r_wrist_height", 0), f.get("l_wrist_height", 0)) for f in frames]
-        final_wrist_h = wrist_heights[-1] if wrist_heights else 0
+    # ===== 5. FOOT POSITIONING =====
 
-        knee_score = 80 if final_knee < 155 else 55 if final_knee < 165 else 35
-        racket_score = 80 if final_wrist_h > 0.0 else 55 if final_wrist_h > -0.03 else 35
+    def _score_foot_positioning(self, frame_data: List[Dict], phases: Dict) -> Dict:
+        """
+        Sampras uses a split step timed to the opponent's contact — light, balanced, explosive.
+        Moves through the volley with a small forward step from the opposite foot.
+        Weight transfers forward into the court, never backward.
+        Feet stay quiet — no big lunges unless necessary.
 
-        combined = int(knee_score * 0.50 + racket_score * 0.50)
+        Signature: He volleys with his feet first, racket second.
+        """
+        # We analyze across the full stroke for foot work
+        all_frames = frame_data
+        if not all_frames:
+            return {
+                "score": 50, "label": "Foot Positioning",
+                "feedback": "Could not assess footwork.",
+                "details": {}, "tip": "Split step, then step forward into the volley. Feet first, racket second."
+            }
 
-        fb = "Good recovery back to ready." if combined >= 70 else "Recovery could be quicker — get the racket back up and knees bent after the volley."
-        tip = "After every volley, immediately return to your ready position — racket up, knees bent, eyes forward. The point isn't over until it's over." if combined < 70 else "Quick recovery. You're ready for the next ball."
+        # Weight transfer — should move FORWARD (into the court), never backward
+        weight_shifts = [f.get("weight_shift_x", 0) for f in all_frames if f]
+        if len(weight_shifts) >= 3:
+            # Compare early weight position to late
+            early_avg = sum(weight_shifts[:len(weight_shifts) // 3]) / max(1, len(weight_shifts) // 3)
+            late_avg = sum(weight_shifts[2 * len(weight_shifts) // 3:]) / max(1, len(weight_shifts) - 2 * len(weight_shifts) // 3)
+            net_forward = late_avg - early_avg
 
-        return {"score": combined, "label": "Recovery", "feedback": fb,
-                "details": {"final_knee_angle": round(final_knee, 1)},
-                "tip": tip}
+            if abs(net_forward) > 0.015:
+                forward_score = 88  # Significant forward weight transfer
+            elif abs(net_forward) > 0.005:
+                forward_score = 68
+            else:
+                forward_score = 42  # Static or backward
+        else:
+            net_forward = 0
+            forward_score = 55
+
+        # Knee bend (athletic ready position → should be low)
+        ready_frames = self._get_frames(frame_data, phases, "ready_position")
+        if not ready_frames:
+            ready_frames = all_frames[:max(2, len(all_frames) // 4)]
+
+        knees = [min(f.get("r_knee_angle", 170), f.get("l_knee_angle", 170)) for f in ready_frames] if ready_frames else [170]
+        avg_knee = sum(knees) / len(knees)
+
+        if avg_knee < 150:
+            knee_score = 90  # Deep athletic bend
+        elif avg_knee < 160:
+            knee_score = 70
+        else:
+            knee_score = 38  # Standing too straight
+
+        # Stability through the motion — feet should stay quiet (no big lunges)
+        stance_ratios = [f.get("stance_ratio", 1.0) for f in all_frames if f]
+        if len(stance_ratios) > 3:
+            stance_variance = sum((s - sum(stance_ratios) / len(stance_ratios)) ** 2 for s in stance_ratios) / len(stance_ratios)
+            stability_score = 85 if stance_variance < 0.02 else 65 if stance_variance < 0.05 else 40
+        else:
+            stability_score = 60
+
+        combined = int(forward_score * 0.40 + knee_score * 0.30 + stability_score * 0.30)
+
+        feedback_parts = []
+        tip = ""
+
+        if forward_score < 55:
+            feedback_parts.append("Your weight isn't transferring forward into the court. You may be leaning back or staying static through the volley.")
+            tip = "Step FORWARD into the volley. After the split step, move through the ball with a small forward step from the opposite foot — forehand volley, left foot steps forward; backhand volley, right foot steps forward. Your weight should always be moving INTO the court, never backward. Sampras volleys with his feet first, racket second. Forward momentum stabilizes the racket face and allows you to punch through the ball."
+        elif forward_score >= 80:
+            feedback_parts.append("Good forward weight transfer into the court. Momentum is going through the ball.")
+
+        if knee_score < 55:
+            feedback_parts.append(f"Standing too tall ({avg_knee:.0f}° knee angle). You need a lower, more explosive base at the net.")
+            if not tip:
+                tip = "Get lower at the net. Bend your knees and stay on the balls of your feet. The split step should leave you light, balanced, and explosive — ready to move in any direction. Sampras' split step was timed to the opponent's contact point."
+        elif knee_score >= 80:
+            feedback_parts.append("Low, athletic stance. Ready to explode in any direction.")
+
+        if stability_score < 55:
+            feedback_parts.append("Your feet are moving too much — the footwork should be quiet and controlled at the net.")
+            if not tip:
+                tip = "Keep your feet quiet. No big lunges unless absolutely necessary. A small, controlled forward step is all you need. Sampras' feet were quiet — efficient movement, no wasted steps."
+        elif stability_score >= 75:
+            feedback_parts.append("Quiet, controlled footwork. Efficient movement without wasted steps.")
+
+        return {
+            "score": combined, "label": "Foot Positioning",
+            "feedback": " ".join(feedback_parts) if feedback_parts else "Excellent footwork — split step, forward step, weight into the court. Feet first, racket second.",
+            "details": {
+                "forward_weight_transfer": round(net_forward, 4),
+                "forward_score": forward_score,
+                "avg_knee_angle": round(avg_knee, 1),
+                "foot_stability_score": stability_score,
+            },
+            "tip": tip if tip else "Outstanding footwork at the net. Light, balanced, forward. Sampras volleys with his feet first, racket second — and so do you."
+        }
 
 
 # ==================== PICKLEBALL ANALYZERS ====================
@@ -2821,8 +3596,8 @@ def format_analysis_result(
     PHASE_KEYS = {
         "forehand": ["unit_turn", "racket_drop", "contact_point", "follow_through", "kinetic_chain", "athletic_base"],
         "serve": ["unit_turn_coil", "ball_toss", "knee_bend_leg_drive", "trophy_racket_drop", "contact_point", "follow_through", "platform_stance"],
-        "backhand": ["unit_turn", "racket_drop", "contact_point", "follow_through", "kinetic_chain", "athletic_base"],
-        "volley": ["ready_position", "shoulder_turn_step", "contact_point", "recovery"],
+        "backhand": ["unit_turn", "racket_drop", "contact_point", "swing_path", "follow_through", "balance_recovery"],
+        "volley": ["unit_turn", "racket_level", "contact_point", "swing_path", "foot_positioning"],
         "dink": ["preparation", "paddle_control", "contact_point", "balance_stability"],
         "drive": ["preparation", "backswing", "contact_point", "follow_through"],
         "pb_serve": ["stance", "pendulum_motion", "contact_point", "follow_through"],
@@ -2832,8 +3607,8 @@ def format_analysis_result(
     MODEL_REFS = {
         "forehand": "Sinner forehand",
         "serve": "Sampras serve",
-        "backhand": "Pro backhand composite",
-        "volley": "Net volley fundamentals",
+        "backhand": "Djokovic two-handed backhand",
+        "volley": "Sampras volley",
         "dink": "Pickleball dink fundamentals",
         "drive": "Pickleball drive",
         "pb_serve": "Pickleball serve",
@@ -2911,9 +3686,9 @@ async def get_stroke_types():
     return {
         "tennis": [
             {"id": "forehand", "name": "Forehand", "description": "Forehand groundstroke — analyzed against Sinner model"},
-            {"id": "backhand", "name": "Backhand", "description": "One or two-handed backhand — Djokovic/Federer composite"},
+            {"id": "backhand", "name": "Backhand", "description": "Two-handed backhand — analyzed against Djokovic model"},
             {"id": "serve", "name": "Serve", "description": "First or second serve — analyzed against Sampras model"},
-            {"id": "volley", "name": "Volley", "description": "Net volley — compact punch technique"},
+            {"id": "volley", "name": "Volley", "description": "Net volley — analyzed against Sampras punch volley model"},
         ],
         "pickleball": [
             {"id": "dink", "name": "Dink", "description": "Soft kitchen shot — touch and control analysis"},
